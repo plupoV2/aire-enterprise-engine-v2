@@ -1,4 +1,4 @@
-import os, re, json, hashlib, sqlite3, base64, math
+import os, re, json, hashlib, sqlite3, base64, math, io
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -9,7 +9,7 @@ import numpy as np
 import openai
 
 # ============================================================
-# AIRE v6: Institutional AI Underwriting Engine
+# AIRE v7: Enterprise AI Underwriting Engine
 # Proprietary Notice: AI Vector Grade™ and Zero-Hallucination Parser
 # ============================================================
 
@@ -131,11 +131,10 @@ def render_sidebar():
         st.markdown("---")
         st.success("🟢 Systems Operational")
         
-        # ADDED: Lead Capture for Enterprise Upgrades
         st.markdown("---")
         st.markdown("### Upgrade to Enterprise")
         st.caption("Want AIRE integrated directly into your firm's Excel or CRM pipeline?")
-        # Replace the link below with your actual free Calendly link!
+        # Make sure to replace this link with your actual Calendly!
         st.markdown("[**Book a 15-Min Demo 📅**](https://calendly.com/)")
         
         return menu
@@ -144,7 +143,6 @@ def view_data_ingestion():
     st.title("Step 1: AI Data Ingestion")
     st.markdown('<div class="alert-box"><b>RedIQ Alternative:</b> Paste messy, unstructured rent roll text below. The AI will instantly parse it using a strict Zero-Hallucination JSON schema.</div>', unsafe_allow_html=True)
     
-    # ADDED: Magic Demo Button
     if st.button("🪄 Load Example Messy Rent Roll"):
         demo_text = """
         Unit 101 is a 1b1b 750sqft paying $1200, market is $1400. 
@@ -251,21 +249,52 @@ def view_risk_engine():
             st.success("Deal Risk Profile saved to Pipeline.")
 
 def view_pipeline():
-    st.title("Step 3: Tracked Pipeline")
+    st.title("Step 3: Institutional Deal Pipeline")
+    st.markdown('<div class="alert-box"><b>Team Collaboration:</b> View your tracked deals below, or export the master pipeline to Excel for the Investment Committee (IC) review.</div>', unsafe_allow_html=True)
+    
     cur = CONN.cursor()
     cur.execute("SELECT id, created_at, address, grade_score, base_noi, risk_probability FROM deals ORDER BY id DESC")
     rows = cur.fetchall()
     
     if not rows:
-        st.info("Your pipeline is currently empty. Run a deal through the Risk Engine.")
+        st.info("Your pipeline is currently empty. Run a deal through the Risk Engine to populate the tracker.")
         return
         
-    df = pd.DataFrame(rows, columns=["ID", "Date Extracted", "Address", "AIRE Score", "Base NOI ($)", "Loss Probability (%)"])
-    df["Date Extracted"] = pd.to_datetime(df["Date Extracted"]).dt.strftime('%Y-%m-%d')
-    df["Base NOI ($)"] = df["Base NOI ($)"].apply(lambda x: f"${x:,.2f}")
-    df["Loss Probability (%)"] = df["Loss Probability (%)"].apply(lambda x: f"{x:.2f}%")
+    df = pd.DataFrame(rows, columns=["Deal ID", "Date Underwritten", "Property Name/Address", "AIRE IC Score", "Base Year NOI ($)", "Loss Probability (%)"])
+    df["Date Underwritten"] = pd.to_datetime(df["Date Underwritten"]).dt.strftime('%Y-%m-%d')
     
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    display_df = df.copy()
+    display_df["Base Year NOI ($)"] = display_df["Base Year NOI ($)"].apply(lambda x: f"${x:,.2f}")
+    display_df["Loss Probability (%)"] = display_df["Loss Probability (%)"].apply(lambda x: f"{x:.2f}%")
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.subheader("📥 Export for Investment Committee")
+    st.caption("Download the raw pipeline data into a formatted Excel (.xlsx) file for your team's master tracker.")
+    
+    def generate_excel(dataframe: pd.DataFrame):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            dataframe.to_excel(writer, index=False, sheet_name='Master Pipeline')
+            worksheet = writer.sheets['Master Pipeline']
+            for idx, col in enumerate(dataframe.columns):
+                series = dataframe[col]
+                max_len = max((
+                    series.astype(str).map(len).max(),
+                    len(str(series.name))
+                )) + 2
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len
+        return output.getvalue()
+
+    excel_data = generate_excel(df)
+    
+    st.download_button(
+        label="📊 Download Excel Pipeline (.xlsx)",
+        data=excel_data,
+        file_name=f"AIRE_Master_Pipeline_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary"
+    )
 
 # ----------------------------
 # 6. APP EXECUTION ROUTER
