@@ -323,4 +323,21 @@ def view_pipeline():
 
     # Clean the dataframe column names before export
     export_df = df.rename(columns={"address": "Property Address", "grade_score": "AIRE Score", "expected_irr": "Expected IRR (%)", "equity_multiple": "Equity Multiple", "base_noi": "Base NOI ($)", "risk_probability": "Loss Prob (%)"})
-    export_df.drop(columns=["
+    export_df.drop(columns=["id"], inplace=True)
+    
+    st.download_button(
+        label="📊 Download Excel Pipeline (.xlsx)",
+        data=generate_excel(export_df),
+        file_name=f"{st.session_state.firm_id}_Pipeline_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary"
+    )
+
+def main():
+    menu = render_sidebar()
+    if menu == "Data Ingestion (PDF AI)": view_data_ingestion()
+    elif menu == "Risk Engine (Monte Carlo)": view_risk_engine()
+    elif menu == "Master Pipeline": view_pipeline()
+
+if __name__ == "__main__":
+    main()
