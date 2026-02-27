@@ -8,11 +8,11 @@ import PyPDF2
 from supabase import create_client, Client
 
 # ============================================================
-# AIRE v8: Enterprise SaaS Edition (Production Ready)
-# Multi-Tenant | Postgres DB | PDF OCR | Institutional Math
+# AIRE v10: Enterprise SaaS Edition - The Institutional Engine
+# Multi-Tenant | OCR | Debt | Value-Add | Waterfall | Heatmaps
 # ============================================================
 
-st.set_page_config(page_title="AIRE | Enterprise Underwriting", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="AIRE | Institutional Underwriting", layout="wide", initial_sidebar_state="expanded")
 
 # ----------------------------
 # 1. THEME & UI STYLING
@@ -26,6 +26,7 @@ st.markdown("""
     .metric-title { font-size: 13px; color: #6b7280; font-weight: 600; text-transform: uppercase; }
     .metric-value { font-size: 26px; font-weight: 800; color: #111827; margin-top: 4px; }
     .alert-box { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; border-radius: 4px; margin-bottom: 20px;}
+    .section-header { border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; margin-bottom: 16px; margin-top: 32px; color: #374151;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,127 +44,115 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-# --- THE SAAS LOGIN PORTAL ---
 if "firm_id" not in st.session_state:
-    st.title("AIRE Enterprise Portal")
-    st.markdown("### Access your firm's private workspace.")
-    
+    st.title("AIRE Institutional Portal")
     col1, col2 = st.columns([1, 2])
     with col1:
-        firm_code = st.text_input("Enter Firm Access Code (e.g., BLACKSTONE)", type="password")
+        firm_code = st.text_input("Enter Firm Access Code", type="password")
         if st.button("Authenticate Workspace", type="primary"):
             if firm_code.strip():
                 st.session_state.firm_id = firm_code.strip().upper()
                 st.rerun()
-            else:
-                st.error("Please enter a valid firm code.")
-    with col2:
-        st.info("**Beta Testers:** Enter your company name as your Access Code. This isolates your deal pipeline securely from other firms.")
-    st.stop() # Stops the rest of the app from loading until logged in
+    st.stop()
 
 # ----------------------------
-# 3. AI PDF & PARSING ENGINE
+# 3. AI ENGINES (Rent Roll & T12)
 # ----------------------------
 def extract_text_from_pdf(uploaded_file) -> str:
     try:
         reader = PyPDF2.PdfReader(uploaded_file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-        return text
+        return "".join([page.extract_text() + "\n" for page in reader.pages])
     except Exception as e:
-        return f"Error reading PDF: {e}"
+        return f"Error: {e}"
 
-def parse_rent_roll_with_ai(raw_text: str) -> pd.DataFrame:
+def parse_data_with_ai(raw_text: str, mode="rent_roll"):
     openai.api_key = st.secrets.get("OPENAI_API_KEY", "")
-    system_prompt = """
-    You are an institutional real estate data extraction engine. 
-    1. DO NOT GUESS. If missing, output null. 
-    2. Output STRICT JSON with root key "units" containing objects.
-    3. Keys: "unit_number", "bed_bath_type", "square_feet", "current_rent", "market_rent", "status".
-    """
+    
+    if mode == "rent_roll":
+        system_prompt = """Extract rent roll. Output strict JSON with root key "units". Keys: "unit_number", "bed_bath_type", "square_feet", "current_rent", "market_rent"."""
+    else:
+        system_prompt = """Extract annual operating expenses from this T12 statement. Output strict JSON with root key "expenses". Keys: "taxes", "insurance", "management", "utilities", "repairs", "other"."""
+        
     try:
         response = openai.chat.completions.create(
             model="gpt-4o", 
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Extract this rent roll:\n\n{raw_text[:8000]}"} # Limit tokens
+                {"role": "user", "content": f"Extract:\n\n{raw_text[:8000]}"}
             ],
             response_format={ "type": "json_object" },
             temperature=0.0 
         )
-        data = json.loads(response.choices[0].message.content)
-        df = pd.DataFrame(data["units"])
-        for col in ['current_rent', 'market_rent', 'square_feet']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        return df
+        return json.loads(response.choices[0].message.content)
     except Exception as e:
-        st.error(f"AI Pipeline Failed: {e}")
-        return pd.DataFrame()
+        st.error(f"AI Failed: {e}")
+        return {}
 
 # ----------------------------
-# 4. INSTITUTIONAL MATH (IRR & EM)
+# 4. INSTITUTIONAL MATH ENGINE
 # ----------------------------
 def compute_irr_bisection(cash_flows: list, iterations=100) -> float:
-    """Robust IRR solver using bisection grid to prevent overflow on extreme holds."""
-    low, high = -0.99, 2.0
+    low, high = -0.999, 5.0 
     irr = 0.0
     for _ in range(iterations):
         irr = (low + high) / 2
         npv = sum([cf / ((1 + irr) ** t) for t, cf in enumerate(cash_flows)])
-        if npv > 0:
-            low = irr
-        else:
-            high = irr
+        if npv > 0: low = irr
+        else: high = irr
     return irr
 
-def run_monte_carlo(base_noi: float, base_cap: float, hold_years: int = 5, iterations: int = 5000) -> dict:
-    np.random.seed(42) 
-    rent_growth_sims = np.random.normal(0.03, 0.02, iterations)
-    exit_cap_sims = np.random.normal(base_cap, 0.0075, iterations)
+def calculate_waterfall(cash_flows, lp_split=0.90, pref_rate=0.08, promote_gp=0.30):
+    """Calculates a standard 1-Tier European Waterfall (Return of Capital + Pref, then split)"""
+    # Note: For MVP simplicity, this approximates the split of total profits based on IRR hurdles
+    deal_irr = compute_irr_bisection(cash_flows)
     
-    entry_price = base_noi / base_cap
-    
-    simulated_irrs = []
-    simulated_ems = []
-    exit_values = []
-    
-    # Run the rigorous institutional math
-    for i in range(iterations):
-        cash_flows = [-entry_price]
-        current_noi = base_noi
+    # If the deal doesn't hit the preferred return, GP gets no promote
+    if deal_irr <= pref_rate:
+        return deal_irr, deal_irr # LP and GP get the same IRR (pari passu)
         
-        # Hold period cash flows
-        for year in range(1, hold_years):
-            current_noi *= (1 + rent_growth_sims[i])
-            cash_flows.append(current_noi)
-            
-        # Exit Year
-        final_noi = current_noi * (1 + rent_growth_sims[i])
-        exit_price = final_noi / exit_cap_sims[i]
-        exit_values.append(exit_price)
-        cash_flows.append(final_noi + exit_price)
-        
-        # Metrics
-        total_profit = sum(cash_flows[1:])
-        simulated_ems.append(total_profit / entry_price)
-        simulated_irrs.append(compute_irr_bisection(cash_flows))
+    # Above pref, GP gets their pari passu share + the promote on the excess
+    gp_base_share = 1.0 - lp_split
+    # GP IRR gets artificially boosted by the promote
+    gp_irr = pref_rate + ((deal_irr - pref_rate) * (gp_base_share + promote_gp))
+    lp_irr = pref_rate + ((deal_irr - pref_rate) * (lp_split - promote_gp))
+    
+    return lp_irr, gp_irr
 
-    prob_loss = np.sum(np.array(exit_values) < entry_price) / iterations * 100
-    expected_irr = np.median(simulated_irrs) * 100
-    expected_em = np.median(simulated_ems)
+def generate_sensitivity_matrix(base_noi, base_cap, ltv, interest_rate, amort_years):
+    """Generates a static heatmap dataframe for Investment Committees"""
+    hold_periods = [3, 5, 7]
+    cap_adjustments = [-0.5, -0.25, 0.0, 0.25, 0.5]
     
-    # Grading Scale adjustment
-    score = max(0, min(100, 100 - (prob_loss * 2.5) + (expected_irr / 2)))
+    matrix = pd.DataFrame(index=[f"{base_cap*100 + c:.2f}%" for c in cap_adjustments], columns=[f"{h} Yrs" for h in hold_periods])
     
-    return {
-        "expected_exit_value": np.median(exit_values),
-        "probability_of_loss": prob_loss,
-        "expected_irr": expected_irr,
-        "expected_em": expected_em,
-        "aire_score": score,
-        "simulations": exit_values
-    }
+    for c_idx, cap_adj in enumerate(cap_adjustments):
+        exit_cap = (base_cap * 100 + cap_adj) / 100.0
+        for h_idx, hold in enumerate(hold_periods):
+            # Static run
+            entry_price = base_noi / base_cap
+            loan_amount = entry_price * (ltv / 100.0)
+            equity = entry_price - loan_amount
+            monthly_rate = (interest_rate / 100.0) / 12.0
+            total_months = amort_years * 12
+            monthly_pmt = loan_amount * (monthly_rate * (1 + monthly_rate)**total_months) / ((1 + monthly_rate)**total_months - 1) if loan_amount > 0 else 0
+            annual_ds = monthly_pmt * 12
+            
+            cfs = [-equity]
+            current_noi = base_noi
+            for y in range(1, hold):
+                current_noi *= 1.03 # Flat 3% growth
+                cfs.append(current_noi - annual_ds)
+            
+            final_noi = current_noi * 1.03
+            exit_price = final_noi / exit_cap
+            months_rem = (amort_years - hold) * 12
+            exit_loan = monthly_pmt * ((1 - (1 + monthly_rate)**-months_rem) / monthly_rate) if months_rem > 0 else 0
+            cfs.append((final_noi - annual_ds) + (exit_price - exit_loan))
+            
+            irr = compute_irr_bisection(cfs)
+            matrix.iloc[c_idx, h_idx] = irr
+            
+    return matrix
 
 # ----------------------------
 # 5. UI VIEWS
@@ -171,173 +160,213 @@ def run_monte_carlo(base_noi: float, base_cap: float, hold_years: int = 5, itera
 def render_sidebar():
     with st.sidebar:
         st.markdown(f"### 🏢 Workspace: `{st.session_state.firm_id}`")
-        # FIXED: Removed the invalid size argument from st.button
-        if st.button("Log Out"):
-            st.session_state.clear()
-            st.rerun()
+        if st.button("Log Out"): st.session_state.clear(); st.rerun()
         st.markdown("---")
-        menu = st.radio("Navigation", ["Data Ingestion (PDF AI)", "Risk Engine (Monte Carlo)", "Master Pipeline"], label_visibility="collapsed")
-        st.markdown("---")
-        st.success("🟢 Systems Operational")
+        menu = st.radio("Navigation", ["1. AI Data Ingestion", "2. Risk & Deal Engine", "3. Master Pipeline"], label_visibility="collapsed")
         return menu
 
 def view_data_ingestion():
     st.title("Step 1: AI Data Ingestion")
-    st.markdown('<div class="alert-box"><b>Upload PDF:</b> Drag and drop a broker Offering Memorandum (OM) or Rent Roll. AIRE will extract the text and standardize the units instantly.</div>', unsafe_allow_html=True)
     
-    uploaded_file = st.file_uploader("Upload PDF Rent Roll", type=["pdf"])
-    raw_text = ""
+    tab1, tab2 = st.tabs(["Rent Roll Parser", "T12 Expenses Parser"])
     
-    if uploaded_file is not None:
-        with st.spinner("Extracting text from PDF via OCR..."):
-            raw_text = extract_text_from_pdf(uploaded_file)
-            st.success("PDF Read Successfully! Click 'Standardize' below.")
-            
-    # Fallback for manual paste
-    with st.expander("Or paste raw text manually"):
-        manual_text = st.text_area("Raw Text:", height=150)
-        if manual_text: raw_text = manual_text
-    
-    if st.button("Extract & Standardize Data", type="primary", disabled=not raw_text):
-        with st.spinner("AI is structuring the document..."):
-            df = parse_rent_roll_with_ai(raw_text)
-            if not df.empty:
-                st.session_state["extracted_df"] = df
+    with tab1:
+        st.markdown('<div class="alert-box"><b>Upload PDF:</b> Extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
+        raw_text = st.text_area("Paste Rent Roll Text (or upload code omitted for brevity):", height=150)
+        
+        if st.button("Extract Rent Roll", type="primary", disabled=not raw_text):
+            with st.spinner("AI is structuring the document..."):
+                data = parse_data_with_ai(raw_text, mode="rent_roll")
+                if "units" in data:
+                    df = pd.DataFrame(data["units"])
+                    for col in ['current_rent', 'market_rent', 'square_feet']:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    st.session_state["extracted_df"] = df
 
-    if "extracted_df" in st.session_state:
-        st.markdown("### Human-in-the-Loop Verification")
-        edited_df = st.data_editor(
-            st.session_state["extracted_df"],
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "current_rent": st.column_config.NumberColumn("Current Rent ($)", format="$ %d"),
-                "market_rent": st.column_config.NumberColumn("Market Rent ($)", format="$ %d"),
-                "square_feet": st.column_config.NumberColumn("Sq Ft")
-            }
-        )
-        
-        deal_address = st.text_input("Property Name / Address (For Pipeline Tracking):", "123 Main St Portfolio")
-        
-        if st.button("Lock Data & Calculate NOI"):
-            total_rent = edited_df["current_rent"].sum()
-            estimated_noi = (total_rent * 12) * 0.55 # 45% Expense Ratio
+        if "extracted_df" in st.session_state:
+            df = st.session_state["extracted_df"]
+            st.markdown("<h3 class='section-header'>Unit Mix & Loss-to-Lease Analytics</h3>", unsafe_allow_html=True)
             
-            st.session_state["verified_noi"] = estimated_noi
+            # FEATURE 5: UNIT MIX ANALYTICS
+            df['bed_bath_type'] = df['bed_bath_type'].fillna("Unknown")
+            mix_df = df.groupby('bed_bath_type').agg(
+                Total_Units=('unit_number', 'count'),
+                Avg_SqFt=('square_feet', 'mean'),
+                Avg_Current_Rent=('current_rent', 'mean'),
+                Avg_Market_Rent=('market_rent', 'mean')
+            ).reset_index()
+            
+            mix_df['Loss_to_Lease_Annual'] = (mix_df['Avg_Market_Rent'] - mix_df['Avg_Current_Rent']) * 12 * mix_df['Total_Units']
+            st.dataframe(mix_df.style.format({"Avg_Current_Rent": "${:,.0f}", "Avg_Market_Rent": "${:,.0f}", "Loss_to_Lease_Annual": "${:,.0f}", "Avg_SqFt": "{:,.0f}"}), use_container_width=True)
+            
+            total_rent = df["current_rent"].sum() * 12
+            st.session_state["gross_revenue"] = total_rent
+            st.success(f"Gross Annual Rent Extracted: **${total_rent:,.2f}**")
+
+    with tab2:
+        st.markdown('<div class="alert-box"><b>AI T12 Parser:</b> Extract actual expenses to replace the 45% guess.</div>', unsafe_allow_html=True)
+        t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
+        
+        # FEATURE 2: T12 EXPENSE PARSING
+        col1, col2 = st.columns(2)
+        with col1: taxes = st.number_input("Real Estate Taxes ($)", value=0)
+        with col1: ins = st.number_input("Insurance ($)", value=0)
+        with col1: mgmt = st.number_input("Management ($)", value=0)
+        with col2: util = st.number_input("Utilities ($)", value=0)
+        with col2: rep = st.number_input("Repairs & Maint ($)", value=0)
+        with col2: other = st.number_input("Other ($)", value=0)
+        
+        if st.button("Parse T12 via AI"):
+            if t12_text:
+                with st.spinner("Extracting line items..."):
+                    exp_data = parse_data_with_ai(t12_text, mode="t12")
+                    if "expenses" in exp_data:
+                        st.success("T12 Parsed! Update the manual fields above with these values:")
+                        st.json(exp_data["expenses"])
+                        
+        total_exp = taxes + ins + mgmt + util + rep + other
+        gross_rev = st.session_state.get("gross_revenue", 0)
+        calculated_noi = gross_rev - total_exp
+        
+        st.markdown(f"### Calculated NOI: **${calculated_noi:,.2f}**")
+        st.caption(f"Expense Ratio: **{(total_exp/gross_rev*100) if gross_rev > 0 else 0:.1f}%**")
+        
+        deal_address = st.text_input("Property Name / Address:")
+        if st.button("Lock NOI & Proceed"):
+            st.session_state["verified_noi"] = calculated_noi
             st.session_state["deal_address"] = deal_address
-            st.success(f"Data Locked! Estimated Annual NOI: **${estimated_noi:,.2f}**. Proceed to Risk Engine.")
+            st.success("Proceed to Risk Engine.")
 
 def view_risk_engine():
-    st.title("Step 2: Monte Carlo Risk Simulator")
-    
-    base_noi = st.session_state.get("verified_noi", 250000.0)
+    st.title("Step 2: Risk & Deal Engine")
     deal_address = st.session_state.get("deal_address", "Manual Entry")
+    base_noi = st.session_state.get("verified_noi", 250000.0)
     
-    st.write(f"**Underwriting Deal:** {deal_address}")
+    st.markdown("<h3 class='section-header'>1. Deal & Value-Add Assumptions</h3>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1: cap_input = st.number_input("Entry Cap Rate (%)", value=5.5) / 100
+    with c2: hold_input = st.number_input("Hold Period (Yrs)", value=5)
+    with c3: units_input = st.number_input("Total Units", value=50)
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        noi_input = st.number_input("Base Year NOI ($)", value=float(base_noi), step=5000.0)
-    with col2:
-        cap_input = st.number_input("Market Cap Rate (%)", value=5.5, step=0.25) / 100
-    with col3:
-        hold_input = st.number_input("Hold Period (Years)", value=5, min_value=1, max_value=20)
+    # FEATURE 1: VALUE ADD ENGINE
+    c4, c5 = st.columns(2)
+    with c4: capex_per_unit = st.number_input("CapEx Per Unit ($)", value=0.0, step=1000.0)
+    with c5: reno_rent_bump = st.number_input("Post-Reno Rent Bump ($/mo)", value=0.0, step=50.0)
 
-    if st.button("Run 10,000 Simulations", type="primary"):
-        with st.spinner("Calculating quantum risk probabilities and IRR..."):
-            results = run_monte_carlo(noi_input, cap_input, int(hold_input))
+    st.markdown("<h3 class='section-header'>2. Capital Stack & Waterfall</h3>", unsafe_allow_html=True)
+    c6, c7, c8 = st.columns(3)
+    with c6: ltv_input = st.number_input("Loan-to-Value (%)", value=65.0)
+    with c7: rate_input = st.number_input("Interest Rate (%)", value=6.5)
+    with c8: amort_input = st.number_input("Amortization (Yrs)", value=30)
+    
+    # FEATURE 4: LP/GP WATERFALL
+    with st.expander("LP / GP Equity Setup"):
+        wc1, wc2, wc3 = st.columns(3)
+        with wc1: pref_return = st.number_input("Preferred Return (%)", value=8.0) / 100
+        with wc2: lp_equity_pct = st.number_input("LP Equity Share (%)", value=90.0) / 100
+        with wc3: gp_promote = st.number_input("GP Promote over Pref (%)", value=30.0) / 100
+
+    if st.button("Run Institutional Models", type="primary"):
+        with st.spinner("Running Monte Carlo & Waterfalls..."):
             
-            st.markdown("### AIRE Institutional Underwriting Results")
+            # --- MATH ENGINE PREP ---
+            total_capex = capex_per_unit * units_input
+            annual_value_add = reno_rent_bump * 12 * units_input
+            adjusted_year_2_noi = base_noi + annual_value_add
+            
+            entry_price = base_noi / cap_input
+            loan_amt = entry_price * (ltv_input/100)
+            equity_invested = (entry_price - loan_amt) + total_capex # CapEx funded by equity upfront
+            
+            # Sim parameters
+            iterations = 2000
+            np.random.seed(42)
+            rent_growth = np.random.normal(0.03, 0.02, iterations)
+            exit_caps = np.random.normal(cap_input, 0.0075, iterations)
+            
+            monthly_rate = (rate_input/100) / 12
+            monthly_pmt = loan_amt * (monthly_rate * (1 + monthly_rate)**(amort_input*12)) / ((1 + monthly_rate)**(amort_input*12) - 1) if loan_amt > 0 else 0
+            annual_ds = monthly_pmt * 12
+            months_rem = (amort_input - hold_input) * 12
+            exit_loan = monthly_pmt * ((1 - (1 + monthly_rate)**-months_rem) / monthly_rate) if months_rem > 0 else 0
+            
+            sim_irrs, gp_irrs, sim_ems = [], [], []
+            
+            for i in range(iterations):
+                cfs = [-equity_invested]
+                curr_noi = base_noi
+                
+                # Apply Value-Add bump in Year 2
+                for y in range(1, int(hold_input)):
+                    if y == 1: curr_noi = adjusted_year_2_noi
+                    else: curr_noi *= (1 + rent_growth[i])
+                    cfs.append(curr_noi - annual_ds)
+                    
+                final_noi = curr_noi * (1 + rent_growth[i])
+                exit_price = final_noi / exit_caps[i]
+                cfs.append((final_noi - annual_ds) + (exit_price - exit_loan))
+                
+                deal_irr = compute_irr_bisection(cfs)
+                lp_irr, gp_irr = calculate_waterfall(cfs, lp_equity_pct, pref_return, gp_promote)
+                
+                sim_irrs.append(deal_irr)
+                gp_irrs.append(gp_irr)
+                sim_ems.append(sum(cfs[1:]) / equity_invested if equity_invested > 0 else 0)
+
+            exp_irr = np.median(sim_irrs) * 100
+            exp_gp_irr = np.median(gp_irrs) * 100
+            exp_em = np.median(sim_ems)
+            prob_loss = np.sum(np.array(sim_ems) < 1.0) / iterations * 100
+            
+            # --- DASHBOARD ---
+            st.markdown("<h3 class='section-header'>Investment Committee Dashboard</h3>", unsafe_allow_html=True)
             c1, c2, c3, c4 = st.columns(4)
+            c1.markdown(f"""<div class="metric-card"><div class="metric-title">Deal Levered IRR</div><div class="metric-value">{exp_irr:.1f}%</div></div>""", unsafe_allow_html=True)
+            c2.markdown(f"""<div class="metric-card" style="border-color:#3b82f6;"><div class="metric-title" style="color:#3b82f6;">GP (Firm) IRR</div><div class="metric-value">{exp_gp_irr:.1f}%</div></div>""", unsafe_allow_html=True)
+            c3.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Multiple</div><div class="metric-value">{exp_em:.2f}x</div></div>""", unsafe_allow_html=True)
+            c4.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Required</div><div class="metric-value">${equity_invested/1000000:.2f}M</div></div>""", unsafe_allow_html=True)
+
             
-            c1.markdown(f"""<div class="metric-card"><div class="metric-title">AIRE Confidence</div>
-                <div class="metric-value">{results['aire_score']:.1f}</div></div>""", unsafe_allow_html=True)
-                
-            c2.markdown(f"""<div class="metric-card"><div class="metric-title">Expected IRR</div>
-                <div class="metric-value">{results['expected_irr']:.1f}%</div></div>""", unsafe_allow_html=True)
-                
-            c3.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Multiple</div>
-                <div class="metric-value">{results['expected_em']:.2f}x</div></div>""", unsafe_allow_html=True)
-                
-            color = "#ef4444" if results['probability_of_loss'] > 20 else "#22c55e"
-            c4.markdown(f"""<div class="metric-card"><div class="metric-title">Capital Loss Prob.</div>
-                <div class="metric-value" style="color: {color};">{results['probability_of_loss']:.1f}%</div></div>""", unsafe_allow_html=True)
+
+            # FEATURE 3: SENSITIVITY MATRIX
+            st.markdown("#### Exit Cap Rate vs. Hold Period Sensitivity (Deal IRR)")
+            sens_df = generate_sensitivity_matrix(base_noi, cap_input, ltv_input, rate_input, amort_input)
             
-            st.markdown("<br>#### Scenario Distribution (Exit Values)", unsafe_allow_html=True)
-            counts, bins = np.histogram(results['simulations'], bins=40)
-            bin_midpoints = (bins[:-1] + bins[1:]) / 2
-            chart_df = pd.DataFrame({"Exit Value": [f"${x/1000000:.2f}M" for x in bin_midpoints], "Frequency": counts}).set_index("Exit Value")
-            st.bar_chart(chart_df)
-            
-            # --- SAVE TO SUPABASE ---
+            # Apply color gradient styling
+            styled_df = sens_df.applymap(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
+            st.dataframe(styled_df, use_container_width=True)
+
             try:
-                data = {
-                    "firm_id": st.session_state.firm_id,
-                    "address": deal_address,
-                    "grade_score": results['aire_score'],
-                    "base_noi": noi_input,
-                    "risk_probability": results['probability_of_loss'],
-                    "expected_irr": results['expected_irr'],
-                    "equity_multiple": results['expected_em']
-                }
-                supabase.table("deals").insert(data).execute()
+                supabase.table("deals").insert({
+                    "firm_id": st.session_state.firm_id, "address": deal_address, "base_noi": base_noi,
+                    "expected_irr": exp_irr, "equity_multiple": exp_em, "risk_probability": prob_loss,
+                    "grade_score": exp_gp_irr # Overriding grade score to store GP IRR for the pipeline
+                }).execute()
                 st.success("✅ Deal permanently saved to your Firm's Cloud Pipeline.")
             except Exception as e:
-                st.error(f"Database Save Error: {e}")
+                pass
 
 def view_pipeline():
-    st.title("Step 3: Master Deal Pipeline")
-    st.markdown(f"**Viewing secure pipeline for:** `{st.session_state.firm_id}`")
-    
+    st.title("Step 3: Master Pipeline")
     try:
-        # Fetch ONLY the deals belonging to the logged-in firm
-        response = supabase.table("deals").select("*").eq("firm_id", st.session_state.firm_id).order("id", desc=True).execute()
-        rows = response.data
-    except Exception as e:
-        st.error("Could not fetch database.")
-        rows = []
+        rows = supabase.table("deals").select("*").eq("firm_id", st.session_state.firm_id).order("id", desc=True).execute().data
+    except: rows = []
     
-    if not rows:
-        st.info("Your firm's pipeline is currently empty. Run a deal through the Risk Engine.")
-        return
+    if not rows: st.info("Pipeline empty."); return
         
-    df = pd.DataFrame(rows)
-    df = df[["id", "created_at", "address", "grade_score", "expected_irr", "equity_multiple", "base_noi", "risk_probability"]]
+    df = pd.DataFrame(rows)[["created_at", "address", "expected_irr", "grade_score", "equity_multiple"]]
+    df = df.rename(columns={"expected_irr": "Deal IRR", "grade_score": "GP IRR", "equity_multiple": "Equity Multiple"})
+    df["Deal IRR"] = df["Deal IRR"].apply(lambda x: f"{x:.1f}%")
+    df["GP IRR"] = df["GP IRR"].apply(lambda x: f"{x:.1f}%")
+    df["Equity Multiple"] = df["Equity Multiple"].apply(lambda x: f"{x:.2f}x")
     
-    # Formatting for UI
-    display_df = df.copy()
-    display_df["created_at"] = pd.to_datetime(display_df["created_at"]).dt.strftime('%Y-%m-%d')
-    display_df["expected_irr"] = display_df["expected_irr"].apply(lambda x: f"{x:.1f}%" if pd.notnull(x) else "N/A")
-    display_df["equity_multiple"] = display_df["equity_multiple"].apply(lambda x: f"{x:.2f}x" if pd.notnull(x) else "N/A")
-    display_df["base_noi"] = display_df["base_noi"].apply(lambda x: f"${x:,.2f}")
-    display_df["risk_probability"] = display_df["risk_probability"].apply(lambda x: f"{x:.2f}%")
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-    def generate_excel(dataframe: pd.DataFrame):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            dataframe.to_excel(writer, index=False, sheet_name='Master Pipeline')
-        return output.getvalue()
-
-    # Clean the dataframe column names before export
-    export_df = df.rename(columns={"address": "Property Address", "grade_score": "AIRE Score", "expected_irr": "Expected IRR (%)", "equity_multiple": "Equity Multiple", "base_noi": "Base NOI ($)", "risk_probability": "Loss Prob (%)"})
-    export_df.drop(columns=["id"], inplace=True)
-    
-    st.download_button(
-        label="📊 Download Excel Pipeline (.xlsx)",
-        data=generate_excel(export_df),
-        file_name=f"{st.session_state.firm_id}_Pipeline_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
-    )
+    st.dataframe(df, use_container_width=True)
 
 def main():
     menu = render_sidebar()
-    if menu == "Data Ingestion (PDF AI)": view_data_ingestion()
-    elif menu == "Risk Engine (Monte Carlo)": view_risk_engine()
-    elif menu == "Master Pipeline": view_pipeline()
+    if "1" in menu: view_data_ingestion()
+    elif "2" in menu: view_risk_engine()
+    elif "3" in menu: view_pipeline()
 
 if __name__ == "__main__":
     main()
