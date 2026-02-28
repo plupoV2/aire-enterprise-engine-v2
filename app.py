@@ -358,7 +358,9 @@ def view_risk_engine():
 
             st.markdown("#### Exit Cap Rate vs. Hold Period Sensitivity (Deal IRR)")
             sens_df = generate_sensitivity_matrix(base_noi, cap_input, ltv_input, rate_input, amort_input)
-            styled_df = sens_df.applymap(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
+            
+            # Updated to use map() to prevent pandas deprecation warnings
+            styled_df = sens_df.map(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
             st.dataframe(styled_df, use_container_width=True)
 
             st.markdown("---")
