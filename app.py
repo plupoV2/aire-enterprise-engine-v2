@@ -3,7 +3,7 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
-import openai
+from openai import OpenAI
 import PyPDF2
 import requests
 import docx
@@ -61,7 +61,8 @@ if "firm_id" not in st.session_state:
 # ----------------------------
 # 3. CORE AI ENGINES
 # ----------------------------
-openai.api_key = st.secrets.get("OPENAI_API_KEY", "")
+# Modern OpenAI Client Initialization
+client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
 
 def extract_text_from_pdf(uploaded_file) -> str:
     try:
@@ -77,7 +78,7 @@ def parse_data_with_ai(raw_text: str, mode="rent_roll"):
         system_prompt = """Extract annual operating expenses from this T12 statement. Output strict JSON with root key "expenses". Keys: "taxes", "insurance", "management", "utilities", "repairs", "other"."""
         
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o", 
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Extract:\n\n{raw_text[:8000]}"}],
             response_format={ "type": "json_object" }, temperature=0.0 
@@ -90,7 +91,7 @@ def ask_pdf_question(pdf_text, question):
     """NUKE FEATURE: Chat with the Deal (RAG)"""
     prompt = f"Based ONLY on the following real estate OM text, answer concisely.\n\nOM TEXT:\n{pdf_text[:15000]}\n\nQUESTION: {question}"
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.2
         )
         return response.choices[0].message.content
@@ -104,8 +105,7 @@ def ask_pdf_question(pdf_text, question):
 def fetch_current_interest_rate():
     """NUKE FEATURE: Live Macro Interest Rate Puller"""
     try:
-        # Fallback logic if API isn't connected. Usually polls FRED API.
-        return 4.25 + 2.50 # 10-Yr Treasury + Standard Spread
+        return 4.25 + 2.50 # 10-Yr Treasury + Standard Spread fallback
     except:
         return 6.75 
 
@@ -361,7 +361,6 @@ def view_risk_engine():
             styled_df = sens_df.applymap(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
             st.dataframe(styled_df, use_container_width=True)
 
-            
             st.markdown("---")
             word_file = generate_ic_memo(deal_address, base_noi, cap_input, ltv_input, exp_irr, exp_em, exp_gp_irr, prob_loss, st.session_state.firm_id)
             st.download_button(
