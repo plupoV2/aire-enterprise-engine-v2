@@ -3,7 +3,6 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
-import PyPDF2
 import requests
 import docx
 from docx.shared import Pt, Inches
