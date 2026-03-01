@@ -12,7 +12,7 @@ from supabase import create_client, Client
 
 # ============================================================
 # AIRE vFINAL: THE NUKE DROP (Enterprise SaaS Edition)
-# Full Math + T12 + RAG Chat + Live Debt + IC Memos
+# Full Math + T12 + RAG Chat + Live Debt + IC Memos + Excel
 # ============================================================
 
 st.set_page_config(page_title="AIRE | Institutional Underwriting", layout="wide", initial_sidebar_state="expanded")
@@ -182,10 +182,26 @@ def view_data_ingestion():
     tab1, tab2, tab3 = st.tabs(["Rent Roll Parser", "T12 Expenses Parser", "💬 Chat with OM (PDF)"])
     
     with tab1:
-        st.markdown('<div class="alert-box"><b>Rent Roll:</b> Extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
-        raw_text = st.text_area("Paste Rent Roll Text:", height=150)
+        st.markdown('<div class="alert-box"><b>Rent Roll:</b> Upload Excel/CSV to extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
+        
+        # Added Toggle for Upload vs Paste
+        rr_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="rr_toggle")
+        raw_text = ""
+        
+        if rr_input_mode == "Upload File (.xlsx, .csv)":
+            rr_file = st.file_uploader("Upload Rent Roll", type=["xlsx", "csv"], key="rr_upload")
+            if rr_file:
+                try:
+                    df_raw = pd.read_excel(rr_file) if rr_file.name.endswith('.xlsx') else pd.read_csv(rr_file)
+                    raw_text = df_raw.to_string() # Convert excel data to string for AI to read
+                    st.success("Spreadsheet loaded successfully! Ready to extract.")
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
+        else:
+            raw_text = st.text_area("Paste Rent Roll Text:", height=150)
+            
         if st.button("Extract Rent Roll", type="primary", disabled=not raw_text):
-            with st.spinner("AI is structuring the document..."):
+            with st.spinner("AI is structuring the spreadsheet..."):
                 data = parse_data_with_ai(raw_text, mode="rent_roll")
                 if "units" in data:
                     df = pd.DataFrame(data["units"])
@@ -208,8 +224,24 @@ def view_data_ingestion():
             st.success(f"Gross Annual Rent Extracted: **${total_rent:,.2f}**")
 
     with tab2:
-        st.markdown('<div class="alert-box"><b>T12 Parser:</b> Extract exact operating expenses.</div>', unsafe_allow_html=True)
-        t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
+        st.markdown('<div class="alert-box"><b>T12 Parser:</b> Upload Excel/CSV to extract exact operating expenses.</div>', unsafe_allow_html=True)
+        
+        # Added Toggle for Upload vs Paste
+        t12_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="t12_toggle")
+        t12_text = ""
+        
+        if t12_input_mode == "Upload File (.xlsx, .csv)":
+            t12_file = st.file_uploader("Upload T12 Statement", type=["xlsx", "csv"], key="t12_upload")
+            if t12_file:
+                try:
+                    df_t12 = pd.read_excel(t12_file) if t12_file.name.endswith('.xlsx') else pd.read_csv(t12_file)
+                    t12_text = df_t12.to_string() # Convert excel data to string for AI to read
+                    st.success("Spreadsheet loaded successfully! Ready to parse.")
+                except Exception as e:
+                    st.error(f"Error reading file: {e}")
+        else:
+            t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
+            
         c1, c2 = st.columns(2)
         with c1: taxes = st.number_input("Real Estate Taxes ($)", value=0)
         with c1: ins = st.number_input("Insurance ($)", value=0)
@@ -238,7 +270,7 @@ def view_data_ingestion():
 
     with tab3:
         st.markdown('<div class="alert-box"><b>Deal Chat (RAG):</b> Upload the full PDF OM and ask it questions.</div>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Upload Offering Memorandum (PDF)", type=["pdf"])
+        uploaded_file = st.file_uploader("Upload Offering Memorandum (PDF)", type=["pdf"], key="rag_upload")
         if uploaded_file:
             with st.spinner("Memorizing document..."):
                 if "pdf_text" not in st.session_state or st.session_state.get("last_file") != uploaded_file.name:
