@@ -8,3 +8,4 @@ matplotlib
 python-docx
 requests
 openpyxl
+geopy
