@@ -9,10 +9,12 @@ import requests
 import docx
 from docx.shared import Pt, Inches
 from supabase import create_client, Client
+import matplotlib.pyplot as plt
+from geopy.geocoders import Nominatim
 
 # ============================================================
-# AIRE vFINAL: THE NUKE DROP (Enterprise SaaS Edition)
-# Full Math + T12 + RAG Chat + Live Debt + IC Memos + Excel + Templates
+# AIRE 2026: THE FLAGSHIP (Enterprise SaaS Edition)
+# Live Macro Debt + Maps + RAG + Monte Carlo + Pro Forma + Fixed Pipeline
 # ============================================================
 
 st.set_page_config(page_title="AIRE | Institutional Underwriting", layout="wide", initial_sidebar_state="expanded")
@@ -59,51 +61,52 @@ if "firm_id" not in st.session_state:
     st.stop()
 
 # ----------------------------
-# 3. CORE AI ENGINES
+# 3. CORE AI & DATA ENGINES
 # ----------------------------
 client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
+
+@st.cache_data(ttl=3600)
+def fetch_live_interest_rate():
+    # Pulls 10-Yr Treasury from FRED API and adds 200 bps commercial spread
+    fred_key = st.secrets.get("FRED_API_KEY", "")
+    if not fred_key: return 6.75 
+    try:
+        url = f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={fred_key}&file_type=json&sort_order=desc&limit=1"
+        resp = requests.get(url, timeout=5).json()
+        ten_yr = float(resp['observations'][0]['value'])
+        return ten_yr + 2.00 
+    except:
+        return 6.75
 
 def extract_text_from_pdf(uploaded_file) -> str:
     try:
         reader = PyPDF2.PdfReader(uploaded_file)
         return "".join([page.extract_text() + "\n" for page in reader.pages])
-    except Exception as e:
-        return f"Error: {e}"
+    except Exception as e: return f"Error: {e}"
 
 def parse_data_with_ai(raw_text: str, mode="rent_roll"):
     if mode == "rent_roll":
         system_prompt = """Extract rent roll. Output strict JSON with root key "units". Keys: "unit_number", "bed_bath_type", "square_feet", "current_rent", "market_rent"."""
     else:
         system_prompt = """Extract annual operating expenses from this T12 statement. Output strict JSON with root key "expenses". Keys: "taxes", "insurance", "management", "utilities", "repairs", "other"."""
-        
     try:
         response = client.chat.completions.create(
-            model="gpt-4o", 
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Extract:\n\n{raw_text[:8000]}"}],
+            model="gpt-4o", messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Extract:\n\n{raw_text[:8000]}"}],
             response_format={ "type": "json_object" }, temperature=0.0 
         )
         return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        return {}
+    except: return {}
 
 def ask_pdf_question(pdf_text, question):
     prompt = f"Based ONLY on the following real estate OM text, answer concisely.\n\nOM TEXT:\n{pdf_text[:15000]}\n\nQUESTION: {question}"
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.2
-        )
+        response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.2)
         return response.choices[0].message.content
-    except Exception as e:
-        return f"Error querying document: {e}"
+    except Exception as e: return f"Error: {e}"
 
 # ----------------------------
 # 4. MATH & REPORTING ENGINES
 # ----------------------------
-@st.cache_data(ttl=3600)
-def fetch_current_interest_rate():
-    try: return 6.75 
-    except: return 6.75 
-
 def compute_irr_bisection(cash_flows: list, iterations=100) -> float:
     low, high = -0.999, 5.0 
     irr = 0.0
@@ -126,7 +129,6 @@ def generate_sensitivity_matrix(base_noi, base_cap, ltv, interest_rate, amort_ye
     hold_periods = [3, 5, 7]
     cap_adjustments = [-0.5, -0.25, 0.0, 0.25, 0.5]
     matrix = pd.DataFrame(index=[f"{base_cap*100 + c:.2f}%" for c in cap_adjustments], columns=[f"{h} Yrs" for h in hold_periods])
-    
     for c_idx, cap_adj in enumerate(cap_adjustments):
         exit_cap = (base_cap * 100 + cap_adj) / 100.0
         for h_idx, hold in enumerate(hold_periods):
@@ -137,7 +139,6 @@ def generate_sensitivity_matrix(base_noi, base_cap, ltv, interest_rate, amort_ye
             total_months = amort_years * 12
             monthly_pmt = loan_amount * (monthly_rate * (1 + monthly_rate)**total_months) / ((1 + monthly_rate)**total_months - 1) if loan_amount > 0 else 0
             annual_ds = monthly_pmt * 12
-            
             cfs = [-equity]
             current_noi = base_noi
             for y in range(1, hold):
@@ -153,16 +154,14 @@ def generate_sensitivity_matrix(base_noi, base_cap, ltv, interest_rate, amort_ye
 
 def generate_ic_memo(deal_name, noi, cap_rate, ltv, irr, em, gp_irr, prob_loss, firm_id):
     doc = docx.Document()
-    title = doc.add_heading(f'Investment Committee Memo: {deal_name}', 0)
-    title.alignment = 1 
-    doc.add_paragraph(f"Firm: {firm_id}\nDate Generated: {datetime.now().strftime('%B %d, %Y')}\nGenerated by: AIRE Enterprise Engine")
+    doc.add_heading(f'Investment Committee Memo: {deal_name}', 0).alignment = 1 
+    doc.add_paragraph(f"Firm: {firm_id}\nDate Generated: {datetime.now().strftime('%B %d, %Y')}\nGenerated by: AIRE Enterprise Engine (2026)")
     doc.add_heading('1. Executive Summary', level=1)
-    doc.add_paragraph(f"This memorandum outlines the underwriting for {deal_name}. Based on our AI Monte Carlo analysis across 2,000 simulated economic environments, this asset presents an Expected Deal IRR of {irr:.1f}% and an Equity Multiple of {em:.2f}x.")
+    doc.add_paragraph(f"Based on AI Monte Carlo analysis across 2,000 simulated environments, this asset presents an Expected Deal IRR of {irr:.1f}% and an Equity Multiple of {em:.2f}x.")
     doc.add_heading('2. Baseline Financial Metrics', level=1)
     doc.add_paragraph(f"• Stabilized NOI: ${noi:,.2f}\n• Market Cap Rate: {cap_rate*100:.2f}%\n• Modeled LTV: {ltv:.1f}%")
     doc.add_heading('3. Risk & Return Profile (Levered)', level=1)
     doc.add_paragraph(f"• GP (Firm) Expected IRR: {gp_irr:.1f}%\n• Probability of Equity Loss: {prob_loss:.1f}%")
-    doc.add_paragraph("Note: Returns are net of modeled capital expenditures and assumes a standard European Waterfall distribution.")
     buffer = io.BytesIO()
     doc.save(buffer)
     return buffer.getvalue()
@@ -177,91 +176,65 @@ def render_sidebar():
         st.markdown("---")
         nav = st.radio("Navigation", ["1. AI Data Ingestion", "2. Risk & Deal Engine", "3. Master Pipeline"], label_visibility="collapsed")
         
-        # --- NEW: SAMPLE TEMPLATE DOWNLOADS ---
         st.markdown("---")
         st.markdown("### 📥 Sample Templates")
         st.caption("Download dummy data to test the engine.")
-        
-        # Dummy Rent Roll Data
         rr_csv = "Unit Number,Unit Type,Square Feet,Current Rent,Market Rent\n101,1BR/1BA,750,1200,1450\n102,1BR/1BA,750,1250,1450\n103,1BR/1BA,750,1300,1450\n201,2BR/2BA,1050,1600,1800\n202,2BR/2BA,1050,1550,1800\n203,2BR/2BA,1050,1700,1800\n301,Studio,550,900,1100\n302,Studio,550,950,1100\n303,Studio,550,850,1100"
-        st.download_button(
-            label="📊 Dummy Rent Roll (.csv)", 
-            data=rr_csv, 
-            file_name="dummy_rent_roll.csv", 
-            mime="text/csv"
-        )
-        
-        # Dummy T12 Data
+        st.download_button(label="📊 Dummy Rent Roll (.csv)", data=rr_csv, file_name="dummy_rent_roll.csv", mime="text/csv")
         t12_csv = "Account Code,Expense Category,Trailing 12 Month Total\n6000,Real Estate Taxes,45000\n6100,Property Insurance,18500\n6200,Property Management Fees,22000\n6300,Water & Sewer (Utilities),12400\n6310,Electric (Utilities),6800\n6400,Repairs and Maintenance,14000\n6500,Landscaping (Other),4500\n6510,Pest Control (Other),1200"
-        st.download_button(
-            label="📉 Dummy T12 (.csv)", 
-            data=t12_csv, 
-            file_name="dummy_t12.csv", 
-            mime="text/csv"
-        )
-        
+        st.download_button(label="📉 Dummy T12 (.csv)", data=t12_csv, file_name="dummy_t12.csv", mime="text/csv")
         return nav
 
 def view_data_ingestion():
-    st.title("Step 1: AI Data Ingestion & Deal Chat")
+    st.title("Step 1: AI Data Ingestion")
     tab1, tab2, tab3 = st.tabs(["Rent Roll Parser", "T12 Expenses Parser", "💬 Chat with OM (PDF)"])
     
     with tab1:
         st.markdown('<div class="alert-box"><b>Rent Roll:</b> Upload Excel/CSV to extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
         rr_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="rr_toggle")
         raw_text = ""
-        
         if rr_input_mode == "Upload File (.xlsx, .csv)":
             rr_file = st.file_uploader("Upload Rent Roll", type=["xlsx", "csv"], key="rr_upload")
             if rr_file:
                 try:
                     df_raw = pd.read_excel(rr_file) if rr_file.name.endswith('.xlsx') else pd.read_csv(rr_file)
                     raw_text = df_raw.to_string() 
-                    st.success("Spreadsheet loaded successfully! Ready to extract.")
-                except Exception as e:
-                    st.error(f"Error reading file: {e}")
-        else:
-            raw_text = st.text_area("Paste Rent Roll Text:", height=150)
+                    st.success("Spreadsheet loaded! Ready to extract.")
+                except Exception as e: st.error(f"Error: {e}")
+        else: raw_text = st.text_area("Paste Rent Roll Text:", height=150)
             
         if st.button("Extract Rent Roll", type="primary", disabled=not raw_text):
-            with st.spinner("AI is structuring the spreadsheet..."):
+            with st.spinner("AI is structuring..."):
                 data = parse_data_with_ai(raw_text, mode="rent_roll")
                 if "units" in data:
                     df = pd.DataFrame(data["units"])
-                    for col in ['current_rent', 'market_rent', 'square_feet']:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    for col in ['current_rent', 'market_rent', 'square_feet']: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                     st.session_state["extracted_df"] = df
 
         if "extracted_df" in st.session_state:
             df = st.session_state["extracted_df"]
             df['bed_bath_type'] = df['bed_bath_type'].fillna("Unknown")
             mix_df = df.groupby('bed_bath_type').agg(
-                Total_Units=('unit_number', 'count'), Avg_SqFt=('square_feet', 'mean'),
-                Avg_Current_Rent=('current_rent', 'mean'), Avg_Market_Rent=('market_rent', 'mean')
+                Total_Units=('unit_number', 'count'), Avg_Current_Rent=('current_rent', 'mean'), Avg_Market_Rent=('market_rent', 'mean')
             ).reset_index()
             mix_df['Loss_to_Lease_Annual'] = (mix_df['Avg_Market_Rent'] - mix_df['Avg_Current_Rent']) * 12 * mix_df['Total_Units']
-            st.markdown("### Unit Mix Analytics")
-            st.dataframe(mix_df.style.format({"Avg_Current_Rent": "${:,.0f}", "Avg_Market_Rent": "${:,.0f}", "Loss_to_Lease_Annual": "${:,.0f}", "Avg_SqFt": "{:,.0f}"}), use_container_width=True)
+            st.dataframe(mix_df.style.format({"Avg_Current_Rent": "${:,.0f}", "Avg_Market_Rent": "${:,.0f}", "Loss_to_Lease_Annual": "${:,.0f}"}), use_container_width=True)
             total_rent = df["current_rent"].sum() * 12
             st.session_state["gross_revenue"] = total_rent
-            st.success(f"Gross Annual Rent Extracted: **${total_rent:,.2f}**")
+            st.success(f"Gross Annual Rent: **${total_rent:,.2f}**")
 
     with tab2:
-        st.markdown('<div class="alert-box"><b>T12 Parser:</b> Upload Excel/CSV to extract exact operating expenses.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="alert-box"><b>T12 Parser:</b> Upload Excel/CSV to extract operating expenses.</div>', unsafe_allow_html=True)
         t12_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="t12_toggle")
         t12_text = ""
-        
         if t12_input_mode == "Upload File (.xlsx, .csv)":
             t12_file = st.file_uploader("Upload T12 Statement", type=["xlsx", "csv"], key="t12_upload")
             if t12_file:
                 try:
                     df_t12 = pd.read_excel(t12_file) if t12_file.name.endswith('.xlsx') else pd.read_csv(t12_file)
                     t12_text = df_t12.to_string() 
-                    st.success("Spreadsheet loaded successfully! Ready to parse.")
-                except Exception as e:
-                    st.error(f"Error reading file: {e}")
-        else:
-            t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
+                except Exception as e: st.error(f"Error: {e}")
+        else: t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
             
         c1, c2 = st.columns(2)
         with c1: taxes = st.number_input("Real Estate Taxes ($)", value=0)
@@ -273,35 +246,31 @@ def view_data_ingestion():
         
         if st.button("Parse T12 via AI"):
             if t12_text:
-                with st.spinner("Extracting line items..."):
+                with st.spinner("Extracting..."):
                     exp_data = parse_data_with_ai(t12_text, mode="t12")
-                    if "expenses" in exp_data:
-                        st.success("T12 Parsed! Update manual fields above:")
-                        st.json(exp_data["expenses"])
+                    if "expenses" in exp_data: st.json(exp_data["expenses"])
                         
         total_exp = taxes + ins + mgmt + util + rep + other
         gross_rev = st.session_state.get("gross_revenue", 0)
         calculated_noi = gross_rev - total_exp
         st.markdown(f"### Calculated NOI: **${calculated_noi:,.2f}**")
-        deal_address = st.text_input("Property Name / Address:")
+        deal_address = st.text_input("Property Name / Address (e.g., 100 Main St, Chicago, IL):")
         if st.button("Lock NOI & Proceed"):
             st.session_state["verified_noi"] = calculated_noi
             st.session_state["deal_address"] = deal_address
             st.success("Proceed to Risk Engine.")
 
     with tab3:
-        st.markdown('<div class="alert-box"><b>Deal Chat (RAG):</b> Upload the full PDF OM and ask it questions.</div>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Upload Offering Memorandum (PDF)", type=["pdf"], key="rag_upload")
+        st.markdown('<div class="alert-box"><b>Deal Chat (RAG):</b> Ask the OM questions.</div>', unsafe_allow_html=True)
+        uploaded_file = st.file_uploader("Upload Offering Memorandum (PDF)", type=["pdf"])
         if uploaded_file:
             with st.spinner("Memorizing document..."):
                 if "pdf_text" not in st.session_state or st.session_state.get("last_file") != uploaded_file.name:
                     st.session_state.pdf_text = extract_text_from_pdf(uploaded_file)
                     st.session_state.last_file = uploaded_file.name
                     st.session_state.chat_history = []
-            st.success("Document Memorized. Ask a question below.")
-            for msg in st.session_state.chat_history:
-                st.chat_message(msg["role"]).write(msg["content"])
-            if user_q := st.chat_input("E.g., 'When was the roof last replaced?'"):
+            for msg in st.session_state.chat_history: st.chat_message(msg["role"]).write(msg["content"])
+            if user_q := st.chat_input("Ask a question..."):
                 st.session_state.chat_history.append({"role": "user", "content": user_q})
                 st.chat_message("user").write(user_q)
                 with st.spinner("Scanning..."):
@@ -311,10 +280,23 @@ def view_data_ingestion():
 
 def view_risk_engine():
     st.title("Step 2: Risk & Deal Engine")
-    deal_address = st.session_state.get("deal_address", "Manual Entry")
+    deal_address = st.session_state.get("deal_address", "Lake Forest, IL")
     base_noi = st.session_state.get("verified_noi", 250000.0)
     
-    st.markdown("<h3 class='section-header'>1. Deal & Value-Add Assumptions</h3>", unsafe_allow_html=True)
+    # GEO-SPATIAL MAPPING
+    with st.expander(f"📍 Location Intelligence: {deal_address}", expanded=True):
+        try:
+            geolocator = Nominatim(user_agent="aire_cre_app")
+            location = geolocator.geocode(deal_address)
+            if location:
+                map_data = pd.DataFrame({'lat': [location.latitude], 'lon': [location.longitude]})
+                st.map(map_data, zoom=14)
+            else:
+                st.caption("Could not map exact address. Please enter a valid street, city, state.")
+        except:
+            st.caption("Map API currently unavailable.")
+
+    st.markdown("<h3 class='section-header'>1. Deal Assumptions</h3>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns(3)
     with c1: cap_input = st.number_input("Entry Cap Rate (%)", value=5.5) / 100
     with c2: hold_input = st.number_input("Hold Period (Yrs)", value=5)
@@ -324,11 +306,11 @@ def view_risk_engine():
     with c4: capex_per_unit = st.number_input("CapEx Per Unit ($)", value=0.0, step=1000.0)
     with c5: reno_rent_bump = st.number_input("Post-Reno Rent Bump ($/mo)", value=0.0, step=50.0)
 
-    st.markdown("<h3 class='section-header'>2. Capital Stack & Waterfall</h3>", unsafe_allow_html=True)
-    live_rate = fetch_current_interest_rate()
+    st.markdown("<h3 class='section-header'>2. Live Debt & Capital Stack</h3>", unsafe_allow_html=True)
+    live_rate = fetch_live_interest_rate()
     c6, c7, c8 = st.columns(3)
     with c6: ltv_input = st.number_input("Loan-to-Value (%)", value=65.0)
-    with c7: rate_input = st.number_input(f"Interest Rate (%) - Est. Market: {live_rate:.2f}%", value=live_rate)
+    with c7: rate_input = st.number_input(f"Interest Rate (%) - LIVE FRED API", value=live_rate)
     with c8: amort_input = st.number_input("Amortization (Yrs)", value=30)
     
     with st.expander("LP / GP Equity Setup"):
@@ -338,7 +320,7 @@ def view_risk_engine():
         with wc3: gp_promote = st.number_input("GP Promote over Pref (%)", value=30.0) / 100
 
     if st.button("Run Institutional Models", type="primary"):
-        with st.spinner("Running Monte Carlo & Waterfalls..."):
+        with st.spinner("Running 2,000 Monte Carlo Simulations..."):
             total_capex = capex_per_unit * units_input
             annual_value_add = reno_rent_bump * 12 * units_input
             adjusted_year_2_noi = base_noi + annual_value_add
@@ -357,6 +339,22 @@ def view_risk_engine():
             months_rem = (amort_input - hold_input) * 12
             exit_loan = monthly_pmt * ((1 - (1 + monthly_rate)**-months_rem) / monthly_rate) if months_rem > 0 else 0
             
+            # 1. Baseline Deterministic Pro Forma
+            pro_forma = {"Year": [0], "NOI": [0], "Debt Service": [0], "Cash Flow": [-equity_invested]}
+            det_noi = base_noi
+            for y in range(1, int(hold_input) + 1):
+                if y == 1: det_noi = adjusted_year_2_noi
+                else: det_noi *= 1.03
+                pro_forma["Year"].append(y)
+                pro_forma["NOI"].append(det_noi)
+                pro_forma["Debt Service"].append(annual_ds)
+                if y == int(hold_input):
+                    det_exit_price = (det_noi * 1.03) / cap_input
+                    pro_forma["Cash Flow"].append((det_noi - annual_ds) + (det_exit_price - exit_loan))
+                else:
+                    pro_forma["Cash Flow"].append(det_noi - annual_ds)
+
+            # 2. Run Monte Carlo
             sim_irrs, gp_irrs, sim_ems = [], [], []
             for i in range(iterations):
                 cfs = [-equity_invested]
@@ -371,7 +369,7 @@ def view_risk_engine():
                 cfs.append((final_noi - annual_ds) + (exit_price - exit_loan))
                 
                 deal_irr = compute_irr_bisection(cfs)
-                lp_irr, gp_irr = calculate_waterfall(cfs, lp_equity_pct, pref_return, gp_promote)
+                _, gp_irr = calculate_waterfall(cfs, lp_equity_pct, pref_return, gp_promote)
                 
                 sim_irrs.append(deal_irr)
                 gp_irrs.append(gp_irr)
@@ -389,30 +387,52 @@ def view_risk_engine():
             c3.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Multiple</div><div class="metric-value">{exp_em:.2f}x</div></div>""", unsafe_allow_html=True)
             c4.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Loss Prob</div><div class="metric-value">{prob_loss:.1f}%</div></div>""", unsafe_allow_html=True)
 
+            # --- THE RESTORED MONTE CARLO CHART ---
+            st.markdown("#### Monte Carlo Simulation (2,000 Scenarios)")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            sim_irrs_pct = [x * 100 for x in sim_irrs]
+            ax.hist(sim_irrs_pct, bins=50, color='#3b82f6', edgecolor='white', alpha=0.8)
+            ax.axvline(exp_irr, color='red', linestyle='dashed', linewidth=2, label=f'Expected IRR: {exp_irr:.1f}%')
+            ax.set_title('Distribution of Levered Deal IRR')
+            ax.set_xlabel('Deal IRR (%)')
+            ax.set_ylabel('Frequency (Number of Scenarios)')
+            ax.legend()
+            st.pyplot(fig)
+
+            # --- THE NEW BASELINE PRO FORMA ---
+            st.markdown("#### Baseline Underwriting Pro Forma")
+            pf_df = pd.DataFrame(pro_forma).set_index("Year")
+            st.dataframe(pf_df.style.format("${:,.0f}"), use_container_width=True)
+
+            # --- SENSITIVITY MATRIX ---
             st.markdown("#### Exit Cap Rate vs. Hold Period Sensitivity (Deal IRR)")
             sens_df = generate_sensitivity_matrix(base_noi, cap_input, ltv_input, rate_input, amort_input)
             styled_df = sens_df.map(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
             st.dataframe(styled_df, use_container_width=True)
 
+            # --- SAVE TO PIPELINE (WITH ERROR HANDLING) ---
             st.markdown("---")
-            word_file = generate_ic_memo(deal_address, base_noi, cap_input, ltv_input, exp_irr, exp_em, exp_gp_irr, prob_loss, st.session_state.firm_id)
-            st.download_button(
-                label="📄 Download 1-Click Investment Committee Memo (.docx)",
-                data=word_file, file_name=f"IC_Memo_{deal_address.replace(' ', '_')}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary"
-            )
-
             try:
+                # Force convert numpy floats to standard Python floats for Supabase
                 supabase.table("deals").insert({
-                    "firm_id": st.session_state.firm_id, "address": deal_address, "base_noi": base_noi,
-                    "expected_irr": exp_irr, "equity_multiple": exp_em, "risk_probability": prob_loss, "grade_score": exp_gp_irr 
+                    "firm_id": str(st.session_state.firm_id), 
+                    "address": str(deal_address), 
+                    "base_noi": float(base_noi),
+                    "expected_irr": float(exp_irr), 
+                    "equity_multiple": float(exp_em), 
+                    "risk_probability": float(prob_loss), 
+                    "grade_score": float(exp_gp_irr) 
                 }).execute()
-            except: pass
+                st.success(f"✅ '{deal_address}' successfully saved to your Master Pipeline!")
+            except Exception as e: 
+                st.error(f"⚠️ Database Save Error: {e}")
+                st.info("Check your Supabase table structure to ensure columns match.")
+            
+            st.download_button(label="📄 Download IC Memo (.docx)", data=word_file, file_name=f"IC_Memo.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary")
 
 def view_pipeline():
     st.title("Step 3: Master Pipeline")
-    try:
-        rows = supabase.table("deals").select("*").eq("firm_id", st.session_state.firm_id).order("id", desc=True).execute().data
+    try: rows = supabase.table("deals").select("*").eq("firm_id", st.session_state.firm_id).order("id", desc=True).execute().data
     except: rows = []
     
     if not rows: st.info("Pipeline empty."); return
