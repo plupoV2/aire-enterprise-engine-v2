@@ -12,7 +12,7 @@ from supabase import create_client, Client
 
 # ============================================================
 # AIRE vFINAL: THE NUKE DROP (Enterprise SaaS Edition)
-# Full Math + T12 + RAG Chat + Live Debt + IC Memos + Excel
+# Full Math + T12 + RAG Chat + Live Debt + IC Memos + Excel + Templates
 # ============================================================
 
 st.set_page_config(page_title="AIRE | Institutional Underwriting", layout="wide", initial_sidebar_state="expanded")
@@ -175,7 +175,32 @@ def render_sidebar():
         st.markdown(f"### 🏢 Workspace: `{st.session_state.firm_id}`")
         if st.button("Log Out"): st.session_state.clear(); st.rerun()
         st.markdown("---")
-        return st.radio("Navigation", ["1. AI Data Ingestion", "2. Risk & Deal Engine", "3. Master Pipeline"], label_visibility="collapsed")
+        nav = st.radio("Navigation", ["1. AI Data Ingestion", "2. Risk & Deal Engine", "3. Master Pipeline"], label_visibility="collapsed")
+        
+        # --- NEW: SAMPLE TEMPLATE DOWNLOADS ---
+        st.markdown("---")
+        st.markdown("### 📥 Sample Templates")
+        st.caption("Download dummy data to test the engine.")
+        
+        # Dummy Rent Roll Data
+        rr_csv = "Unit Number,Unit Type,Square Feet,Current Rent,Market Rent\n101,1BR/1BA,750,1200,1450\n102,1BR/1BA,750,1250,1450\n103,1BR/1BA,750,1300,1450\n201,2BR/2BA,1050,1600,1800\n202,2BR/2BA,1050,1550,1800\n203,2BR/2BA,1050,1700,1800\n301,Studio,550,900,1100\n302,Studio,550,950,1100\n303,Studio,550,850,1100"
+        st.download_button(
+            label="📊 Dummy Rent Roll (.csv)", 
+            data=rr_csv, 
+            file_name="dummy_rent_roll.csv", 
+            mime="text/csv"
+        )
+        
+        # Dummy T12 Data
+        t12_csv = "Account Code,Expense Category,Trailing 12 Month Total\n6000,Real Estate Taxes,45000\n6100,Property Insurance,18500\n6200,Property Management Fees,22000\n6300,Water & Sewer (Utilities),12400\n6310,Electric (Utilities),6800\n6400,Repairs and Maintenance,14000\n6500,Landscaping (Other),4500\n6510,Pest Control (Other),1200"
+        st.download_button(
+            label="📉 Dummy T12 (.csv)", 
+            data=t12_csv, 
+            file_name="dummy_t12.csv", 
+            mime="text/csv"
+        )
+        
+        return nav
 
 def view_data_ingestion():
     st.title("Step 1: AI Data Ingestion & Deal Chat")
@@ -183,8 +208,6 @@ def view_data_ingestion():
     
     with tab1:
         st.markdown('<div class="alert-box"><b>Rent Roll:</b> Upload Excel/CSV to extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
-        
-        # Added Toggle for Upload vs Paste
         rr_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="rr_toggle")
         raw_text = ""
         
@@ -193,7 +216,7 @@ def view_data_ingestion():
             if rr_file:
                 try:
                     df_raw = pd.read_excel(rr_file) if rr_file.name.endswith('.xlsx') else pd.read_csv(rr_file)
-                    raw_text = df_raw.to_string() # Convert excel data to string for AI to read
+                    raw_text = df_raw.to_string() 
                     st.success("Spreadsheet loaded successfully! Ready to extract.")
                 except Exception as e:
                     st.error(f"Error reading file: {e}")
@@ -225,8 +248,6 @@ def view_data_ingestion():
 
     with tab2:
         st.markdown('<div class="alert-box"><b>T12 Parser:</b> Upload Excel/CSV to extract exact operating expenses.</div>', unsafe_allow_html=True)
-        
-        # Added Toggle for Upload vs Paste
         t12_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="t12_toggle")
         t12_text = ""
         
@@ -235,7 +256,7 @@ def view_data_ingestion():
             if t12_file:
                 try:
                     df_t12 = pd.read_excel(t12_file) if t12_file.name.endswith('.xlsx') else pd.read_csv(t12_file)
-                    t12_text = df_t12.to_string() # Convert excel data to string for AI to read
+                    t12_text = df_t12.to_string() 
                     st.success("Spreadsheet loaded successfully! Ready to parse.")
                 except Exception as e:
                     st.error(f"Error reading file: {e}")
