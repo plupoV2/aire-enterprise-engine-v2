@@ -428,6 +428,9 @@ def view_risk_engine():
                 st.error(f"⚠️ Database Save Error: {e}")
                 st.info("Check your Supabase table structure to ensure columns match.")
             
+            # --- THE MISSING LINE ---
+            word_file = generate_ic_memo(deal_address, base_noi, cap_input, ltv_input, exp_irr, exp_em, exp_gp_irr, prob_loss, st.session_state.firm_id)
+            
             st.download_button(label="📄 Download IC Memo (.docx)", data=word_file, file_name=f"IC_Memo.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary")
 
 def view_pipeline():
