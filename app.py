@@ -36,7 +36,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# 2. DB INIT & LOGIN
+# 2. DB INIT & SECURE LOGIN
 # ----------------------------
 @st.cache_resource
 def init_supabase() -> Client:
@@ -49,15 +49,28 @@ def init_supabase() -> Client:
 
 supabase = init_supabase()
 
-if "firm_id" not in st.session_state:
-    st.title("AIRE Institutional Portal")
+# Check if user is authenticated
+if "user_email" not in st.session_state:
+    st.title("AIRE | Enterprise Authentication")
+    st.markdown("Please log in to access the institutional underwriting engine.")
+    
     col1, col2 = st.columns([1, 2])
     with col1:
-        firm_code = st.text_input("Enter Firm Access Code", type="password")
-        if st.button("Authenticate Workspace", type="primary"):
-            if firm_code.strip():
-                st.session_state.firm_id = firm_code.strip().upper()
-                st.rerun()
+        with st.form("login_form"):
+            email = st.text_input("Corporate Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Secure Login", type="primary")
+            
+            if submitted:
+                try:
+                    # Authenticate directly with Supabase
+                    response = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user_email = response.user.email
+                    st.session_state.firm_id = response.user.email.split('@')[1].split('.')[0].upper() # Extracts firm name from domain
+                    st.success("✅ Authentication successful. Decrypting models...")
+                    st.rerun()
+                except Exception as e:
+                    st.error("⚠️ Access Denied. Invalid email, password, or inactive subscription.")
     st.stop()
 
 # ----------------------------
