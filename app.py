@@ -217,17 +217,22 @@ def render_sensitivity_heatmap(base_irr=0.182, base_cap=0.0525):
         z=matrix, x=x_labels, y=y_labels,
         colorscale=[[0, '#fee2e2'], [0.5, '#ffffff'], [1, '#dcfce3']],
         text=[[f"{val*100:.1f}%" for val in row] for row in matrix],
-        texttemplate="<b>%{text}</b>", textfont={"size": 12, "family": "JetBrains Mono"},
+        texttemplate="<b>%{text}</b>", textfont=dict(size=12, family="JetBrains Mono"),
         showscale=False, hoverinfo="skip"
     ))
     
-    # Removed the invalid 'weight' argument and used standard plotly layout properties
+    # Bulletproof layout updates (no nested dictionaries)
     fig.update_layout(
-        margin=dict(l=0, r=0, t=10, b=0), height=280,
-        xaxis=dict(title="Hold Period", side="top", titlefont=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a')),
-        yaxis=dict(title="Exit Cap Rate", titlefont=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a'), autorange="reversed"),
-        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+        margin=dict(l=0, r=0, t=30, b=0), 
+        height=280,
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)'
     )
+    
+    # Safely update axes individually
+    fig.update_xaxes(title_text="Hold Period", side="top", title_font=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a'))
+    fig.update_yaxes(title_text="Exit Cap Rate", autorange="reversed", title_font=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a'))
+    
     return fig
 
 def render_capital_stack_donut(d):
