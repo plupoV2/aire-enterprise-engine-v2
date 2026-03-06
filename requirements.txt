@@ -1,11 +1,9 @@
 streamlit
-pandas
 numpy
-openai
-PyPDF2
-supabase
-matplotlib
-python-docx
+pandas
+pydeck
+plotly
 requests
-openpyxl
-geopy
+openai
+supabase
+PyPDF2
