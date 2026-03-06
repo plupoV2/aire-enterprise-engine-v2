@@ -283,20 +283,21 @@ def render_proforma_html():
 # 6. APPLICATION VIEWS
 # ------------------------------------------------------------------------------
 def view_dashboard():
-    # --- HEADER ---
-    st.markdown(f"""
-    <div class="enterprise-header">
-        <div>
-            <div class="header-title">{st.session_state.deal_data['name']} <span style="color:#94a3b8; font-weight:400;">| 240 Units | Value-Add</span></div>
-            <div style="color: #64748b; font-size: 13px; margin-top: 6px; font-weight: 500;">
-                <span style="color: #10b981;">●</span> Pipeline: Active Underwriting &nbsp;&bull;&nbsp; Market: Dallas, TX &nbsp;&bull;&nbsp; Last Updated: Just now
-            </div>
-        </div>
-        <div class="header-badge">WORKSPACE: {st.session_state.firm_id}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Check if a deal has actually been processed
+    if not st.session_state.get('deal_loaded', False):
+        st.markdown("### No Active Deal Loaded")
+        st.info("The dashboard is empty. Please navigate to the **AI Data Room & Chat** tab to upload a T12 and Rent Roll to begin your analysis.")
+        
+        # Optional: Add a quick-action button right here to jump to the data room
+        if st.button("Go to AI Data Room"):
+            st.session_state.current_view = "AI Data Room & Chat"
+            st.rerun()
+        return # This stops the rest of the dashboard from rendering dummy data
 
-    d = st.session_state.deal_data
+    # --- THE REST OF YOUR DASHBOARD CODE GOES BELOW HERE ---
+    # (Keep your existing layout, metrics, and chart rendering here)
+    st.markdown("### The Grand at 100 Main St | 240 Units | Value-Add")
+    # ... etc ...
 
     # --- ROW 1: THE METRICS ---
     c1, c2, c3, c4 = st.columns(4)
@@ -453,6 +454,26 @@ def main():
     if st.session_state.current_view == "Dashboard": view_dashboard()
     elif st.session_state.current_view == "DataRoom": view_data_room()
     elif st.session_state.current_view == "ICMemo": view_ic_memo()
+def view_master_pipeline():
+    st.markdown("### Master Pipeline")
+    st.write("Your active deals will populate here.")
+    # We will build the actual pipeline table here next!
+    
+def view_settings():
+    st.markdown("### Underwriting Settings")
+    st.write("Configure global assumptions, target IRRs, and API connections here.")
+    # We will build the settings form here next!
+# Page Routing
+    if st.session_state.current_view == "Dashboard": 
+        view_dashboard()
+    elif st.session_state.current_view == "AI Data Room & Chat": 
+        view_data_room()
+    elif st.session_state.current_view == "IC Memo Generator": 
+        view_ic_memo()
+    elif st.session_state.current_view == "Master Pipeline": 
+        view_master_pipeline()
+    elif st.session_state.current_view == "Underwriting Settings": 
+        view_settings()
 
 if __name__ == "__main__":
     main()
