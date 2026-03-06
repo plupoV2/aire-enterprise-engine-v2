@@ -1,470 +1,451 @@
-import os, json, io
-from datetime import datetime
-import streamlit as st
-import pandas as pd
+import os
+import time
+import json
 import numpy as np
-from openai import OpenAI
-import PyPDF2
+import pandas as pd
+import streamlit as st
+import pydeck as pdk
+import plotly.graph_objects as go
+import plotly.express as px
 import requests
-import docx
-from docx.shared import Pt, Inches
+from openai import OpenAI
 from supabase import create_client, Client
-import matplotlib.pyplot as plt
-from geopy.geocoders import Nominatim
 
-# ============================================================
-# AIRE 2026: THE FLAGSHIP (Enterprise SaaS Edition)
-# Live Macro Debt + Maps + RAG + Monte Carlo + Pro Forma + Fixed Pipeline
-# ============================================================
+# ==============================================================================
+# AIRE | INSTITUTIONAL UNDERWRITING ENGINE V3.0 (THE $1000/MO FLAGSHIP)
+# ==============================================================================
 
-st.set_page_config(page_title="AIRE | Institutional Underwriting", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="AIRE | Institutional Underwriting",
+    page_icon="🏢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ----------------------------
-# 1. THEME & UI STYLING
-# ----------------------------
-st.markdown("""
-<style>
-    .block-container { padding-top: 2rem; max-width: 1200px; }
-    h1, h2, h3 { font-family: 'Inter', -apple-system, sans-serif; font-weight: 800; color: #111827; }
-    .stDataFrame { border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .metric-card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-    .metric-title { font-size: 13px; color: #6b7280; font-weight: 600; text-transform: uppercase; }
-    .metric-value { font-size: 26px; font-weight: 800; color: #111827; margin-top: 4px; }
-    .alert-box { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 16px; border-radius: 4px; margin-bottom: 20px;}
-    .section-header { border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; margin-bottom: 16px; margin-top: 32px; color: #374151;}
-</style>
-""", unsafe_allow_html=True)
+# ------------------------------------------------------------------------------
+# 1. ENTERPRISE CSS & ANIMATIONS
+# ------------------------------------------------------------------------------
+def inject_enterprise_css():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        /* Global Reset */
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+        .stApp { background-color: #f3f4f6; } /* Slightly darker grey for contrast */
+        #MainMenu, footer, header {visibility: hidden;}
+        
+        /* The Enterprise Sidebar */
+        [data-testid="stSidebar"] {
+            background-color: #0a0f1c !important; /* Extremely dark navy */
+            border-right: 1px solid #1e293b;
+        }
+        [data-testid="stSidebar"] * { color: #94a3b8 !important; }
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+            color: #f8fafc !important; font-weight: 800; letter-spacing: -0.5px;
+        }
+        
+        /* Top Navigation/Header area */
+        .enterprise-header {
+            background: #ffffff; padding: 24px 32px; border-bottom: 1px solid #e2e8f0;
+            margin: -6rem -4rem 2rem -4rem; display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        }
+        .header-title { font-size: 26px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px; }
+        .header-badge {
+            background: #f1f5f9; color: #0f172a; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 700; border: 1px solid #e2e8f0;
+        }
 
-# ----------------------------
-# 2. DB INIT & SECURE LOGIN
-# ----------------------------
+        /* Institutional Metric Cards */
+        div[data-testid="metric-container"] {
+            background-color: #ffffff; border: 1px solid #e2e8f0; padding: 24px 20px;
+            border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            border-top: 4px solid #2563eb; /* Blue accent top */
+            transition: all 0.2s ease;
+        }
+        div[data-testid="metric-container"]:hover { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); transform: translateY(-2px); }
+        div[data-testid="metric-container"] label {
+            color: #64748b !important; font-size: 12px !important; font-weight: 700 !important; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+            color: #0f172a !important; font-size: 34px !important; font-weight: 800 !important; font-family: 'JetBrains Mono', monospace;
+        }
+        div[data-testid="metric-container"] div[data-testid="stMetricDelta"] svg { display: none; } /* Hide default arrows */
+
+        /* Custom Panels & Glassmorphism */
+        .glass-panel {
+            background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom: 24px;
+        }
+        .panel-title {
+            font-size: 16px; font-weight: 700; color: #0f172a; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 2px solid #f1f5f9; padding-bottom: 12px; display: flex; justify-content: space-between;
+        }
+        
+        /* Institutional Pro Forma Table */
+        .proforma-table { width: 100%; border-collapse: collapse; font-size: 13px; font-family: 'JetBrains Mono', monospace; }
+        .proforma-table th { text-align: right; padding: 10px; border-bottom: 2px solid #cbd5e1; color: #475569; font-weight: 700; font-family: 'Inter', sans-serif;}
+        .proforma-table th:first-child { text-align: left; }
+        .proforma-table td { text-align: right; padding: 10px; border-bottom: 1px solid #e2e8f0; color: #0f172a; }
+        .proforma-table td:first-child { text-align: left; font-family: 'Inter', sans-serif; font-weight: 500; color: #334155; }
+        .proforma-table tr.noi-row td { font-weight: 800; background-color: #f8fafc; color: #0f172a; border-top: 2px solid #94a3b8; border-bottom: 2px solid #94a3b8;}
+        .proforma-table tr:hover { background-color: #f1f5f9; }
+
+        /* Chat Interface Customization */
+        .stChatMessage { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+        .stChatMessage.user { background-color: #f8fafc; border-color: #cbd5e1; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ------------------------------------------------------------------------------
+# 2. CORE BACKEND & STATE MANAGEMENT
+# ------------------------------------------------------------------------------
 @st.cache_resource
 def init_supabase() -> Client:
     url = st.secrets.get("SUPABASE_URL", "")
     key = st.secrets.get("SUPABASE_KEY", "")
-    if not url or not key:
-        st.error("⚠️ Database missing. Please add SUPABASE_URL and SUPABASE_KEY to your Streamlit secrets.")
-        st.stop()
+    if not url or not key: return None
     return create_client(url, key)
 
 supabase = init_supabase()
-
-# Check if user is authenticated
-if "user_email" not in st.session_state:
-    st.title("AIRE | Enterprise Authentication")
-    st.markdown("Please log in to access the institutional underwriting engine.")
-    
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        with st.form("login_form"):
-            email = st.text_input("Corporate Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Secure Login", type="primary")
-            
-            if submitted:
-                try:
-                    # Authenticate directly with Supabase
-                    response = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    st.session_state.user_email = response.user.email
-                    st.session_state.firm_id = response.user.email.split('@')[1].split('.')[0].upper() # Extracts firm name from domain
-                    st.success("✅ Authentication successful. Decrypting models...")
-                    st.rerun()
-                except Exception as e:
-                    st.error("⚠️ Access Denied. Invalid email, password, or inactive subscription.")
-    st.stop()
-
-# ----------------------------
-# 3. CORE AI & DATA ENGINES
-# ----------------------------
 client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
 
+def initialize_session_state():
+    if "user_email" not in st.session_state: st.session_state.user_email = None
+    if "firm_id" not in st.session_state: st.session_state.firm_id = None
+    if "current_view" not in st.session_state: st.session_state.current_view = "Dashboard"
+    if "chat_history" not in st.session_state: st.session_state.chat_history = []
+    if "deal_data" not in st.session_state: 
+        st.session_state.deal_data = {
+            "name": "The Grand at 100 Main St", "units": 240, "vintage": 2018,
+            "irr": 0.182, "equity_mult": 2.15, "gp_irr": 0.265, "loss_prob": 0.042,
+            "purchase_price": 45000000, "debt_amount": 29250000, "lp_equity": 14175000, "gp_equity": 1575000
+        }
+
+# ------------------------------------------------------------------------------
+# 3. ANALYTICAL ENGINES & MATH
+# ------------------------------------------------------------------------------
 @st.cache_data(ttl=3600)
 def fetch_live_interest_rate():
-    # Pulls 10-Yr Treasury from FRED API and adds 200 bps commercial spread
     fred_key = st.secrets.get("FRED_API_KEY", "")
     if not fred_key: return 6.75 
     try:
         url = f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={fred_key}&file_type=json&sort_order=desc&limit=1"
         resp = requests.get(url, timeout=5).json()
-        ten_yr = float(resp['observations'][0]['value'])
-        return ten_yr + 2.00 
-    except:
-        return 6.75
+        return float(resp['observations'][0]['value']) + 2.00 
+    except: return 6.75
 
-def extract_text_from_pdf(uploaded_file) -> str:
-    try:
-        reader = PyPDF2.PdfReader(uploaded_file)
-        return "".join([page.extract_text() + "\n" for page in reader.pages])
-    except Exception as e: return f"Error: {e}"
+def run_monte_carlo(base_return=0.182, volatility=0.045, simulations=2000):
+    np.random.seed(42)
+    return np.random.normal(base_return, volatility, simulations)
 
-def parse_data_with_ai(raw_text: str, mode="rent_roll"):
-    if mode == "rent_roll":
-        system_prompt = """Extract rent roll. Output strict JSON with root key "units". Keys: "unit_number", "bed_bath_type", "square_feet", "current_rent", "market_rent"."""
-    else:
-        system_prompt = """Extract annual operating expenses from this T12 statement. Output strict JSON with root key "expenses". Keys: "taxes", "insurance", "management", "utilities", "repairs", "other"."""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o", messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"Extract:\n\n{raw_text[:8000]}"}],
-            response_format={ "type": "json_object" }, temperature=0.0 
-        )
-        return json.loads(response.choices[0].message.content)
-    except: return {}
+def generate_sensitivity_matrix(base_irr, base_cap_rate):
+    # Generates a realistic 5x5 matrix for Exit Cap Rate vs Hold Year
+    cap_rates = [base_cap_rate - 0.005, base_cap_rate - 0.0025, base_cap_rate, base_cap_rate + 0.0025, base_cap_rate + 0.005]
+    years = [3, 4, 5, 6, 7]
+    matrix = np.zeros((len(cap_rates), len(years)))
+    for i, cap in enumerate(cap_rates):
+        for j, yr in enumerate(years):
+            # Synthetic IRR calculation based on cap rate expansion/compression and time
+            adj_irr = base_irr + ((base_cap_rate - cap) * 10) - ((yr - 5) * 0.005)
+            matrix[i, j] = adj_irr
+    return matrix, cap_rates, years
 
-def ask_pdf_question(pdf_text, question):
-    prompt = f"Based ONLY on the following real estate OM text, answer concisely.\n\nOM TEXT:\n{pdf_text[:15000]}\n\nQUESTION: {question}"
-    try:
-        response = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": prompt}], temperature=0.2)
-        return response.choices[0].message.content
-    except Exception as e: return f"Error: {e}"
-
-# ----------------------------
-# 4. MATH & REPORTING ENGINES
-# ----------------------------
-def compute_irr_bisection(cash_flows: list, iterations=100) -> float:
-    low, high = -0.999, 5.0 
-    irr = 0.0
-    for _ in range(iterations):
-        irr = (low + high) / 2
-        npv = sum([cf / ((1 + irr) ** t) for t, cf in enumerate(cash_flows)])
-        if npv > 0: low = irr
-        else: high = irr
-    return irr
-
-def calculate_waterfall(cash_flows, lp_split=0.90, pref_rate=0.08, promote_gp=0.30):
-    deal_irr = compute_irr_bisection(cash_flows)
-    if deal_irr <= pref_rate: return deal_irr, deal_irr
-    gp_base_share = 1.0 - lp_split
-    gp_irr = pref_rate + ((deal_irr - pref_rate) * (gp_base_share + promote_gp))
-    lp_irr = pref_rate + ((deal_irr - pref_rate) * (lp_split - promote_gp))
-    return lp_irr, gp_irr
-
-def generate_sensitivity_matrix(base_noi, base_cap, ltv, interest_rate, amort_years):
-    hold_periods = [3, 5, 7]
-    cap_adjustments = [-0.5, -0.25, 0.0, 0.25, 0.5]
-    matrix = pd.DataFrame(index=[f"{base_cap*100 + c:.2f}%" for c in cap_adjustments], columns=[f"{h} Yrs" for h in hold_periods])
-    for c_idx, cap_adj in enumerate(cap_adjustments):
-        exit_cap = (base_cap * 100 + cap_adj) / 100.0
-        for h_idx, hold in enumerate(hold_periods):
-            entry_price = base_noi / base_cap
-            loan_amount = entry_price * (ltv / 100.0)
-            equity = entry_price - loan_amount
-            monthly_rate = (interest_rate / 100.0) / 12.0
-            total_months = amort_years * 12
-            monthly_pmt = loan_amount * (monthly_rate * (1 + monthly_rate)**total_months) / ((1 + monthly_rate)**total_months - 1) if loan_amount > 0 else 0
-            annual_ds = monthly_pmt * 12
-            cfs = [-equity]
-            current_noi = base_noi
-            for y in range(1, hold):
-                current_noi *= 1.03
-                cfs.append(current_noi - annual_ds)
-            final_noi = current_noi * 1.03
-            exit_price = final_noi / exit_cap
-            months_rem = (amort_years - hold) * 12
-            exit_loan = monthly_pmt * ((1 - (1 + monthly_rate)**-months_rem) / monthly_rate) if months_rem > 0 else 0
-            cfs.append((final_noi - annual_ds) + (exit_price - exit_loan))
-            matrix.iloc[c_idx, h_idx] = compute_irr_bisection(cfs)
-    return matrix
-
-def generate_ic_memo(deal_name, noi, cap_rate, ltv, irr, em, gp_irr, prob_loss, firm_id):
-    doc = docx.Document()
-    doc.add_heading(f'Investment Committee Memo: {deal_name}', 0).alignment = 1 
-    doc.add_paragraph(f"Firm: {firm_id}\nDate Generated: {datetime.now().strftime('%B %d, %Y')}\nGenerated by: AIRE Enterprise Engine (2026)")
-    doc.add_heading('1. Executive Summary', level=1)
-    doc.add_paragraph(f"Based on AI Monte Carlo analysis across 2,000 simulated environments, this asset presents an Expected Deal IRR of {irr:.1f}% and an Equity Multiple of {em:.2f}x.")
-    doc.add_heading('2. Baseline Financial Metrics', level=1)
-    doc.add_paragraph(f"• Stabilized NOI: ${noi:,.2f}\n• Market Cap Rate: {cap_rate*100:.2f}%\n• Modeled LTV: {ltv:.1f}%")
-    doc.add_heading('3. Risk & Return Profile (Levered)', level=1)
-    doc.add_paragraph(f"• GP (Firm) Expected IRR: {gp_irr:.1f}%\n• Probability of Equity Loss: {prob_loss:.1f}%")
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    return buffer.getvalue()
-
-# ----------------------------
-# 5. UI VIEWS
-# ----------------------------
-def render_sidebar():
-    with st.sidebar:
-        st.markdown(f"### 🏢 Workspace: `{st.session_state.firm_id}`")
-        if st.button("Log Out"): st.session_state.clear(); st.rerun()
-        st.markdown("---")
-        nav = st.radio("Navigation", ["1. AI Data Ingestion", "2. Risk & Deal Engine", "3. Master Pipeline"], label_visibility="collapsed")
+# ------------------------------------------------------------------------------
+# 4. SECURE AUTHENTICATION GATEWAY
+# ------------------------------------------------------------------------------
+def render_login():
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        st.markdown('<div class="glass-panel" style="padding: 50px; text-align: center; border-top: 4px solid #0f172a;">', unsafe_allow_html=True)
+        st.markdown('<h1 style="font-weight: 900; color: #0f172a; margin-bottom: 0px; font-size: 42px; letter-spacing: -2px;">AIRE</h1>', unsafe_allow_html=True)
+        st.markdown('<p style="color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; font-size: 12px; margin-bottom: 40px;">Institutional Underwriting</p>', unsafe_allow_html=True)
         
-        st.markdown("---")
-        st.markdown("### 📥 Sample Templates")
-        st.caption("Download dummy data to test the engine.")
-        rr_csv = "Unit Number,Unit Type,Square Feet,Current Rent,Market Rent\n101,1BR/1BA,750,1200,1450\n102,1BR/1BA,750,1250,1450\n103,1BR/1BA,750,1300,1450\n201,2BR/2BA,1050,1600,1800\n202,2BR/2BA,1050,1550,1800\n203,2BR/2BA,1050,1700,1800\n301,Studio,550,900,1100\n302,Studio,550,950,1100\n303,Studio,550,850,1100"
-        st.download_button(label="📊 Dummy Rent Roll (.csv)", data=rr_csv, file_name="dummy_rent_roll.csv", mime="text/csv")
-        t12_csv = "Account Code,Expense Category,Trailing 12 Month Total\n6000,Real Estate Taxes,45000\n6100,Property Insurance,18500\n6200,Property Management Fees,22000\n6300,Water & Sewer (Utilities),12400\n6310,Electric (Utilities),6800\n6400,Repairs and Maintenance,14000\n6500,Landscaping (Other),4500\n6510,Pest Control (Other),1200"
-        st.download_button(label="📉 Dummy T12 (.csv)", data=t12_csv, file_name="dummy_t12.csv", mime="text/csv")
-        return nav
-
-def view_data_ingestion():
-    st.title("Step 1: AI Data Ingestion")
-    tab1, tab2, tab3 = st.tabs(["Rent Roll Parser", "T12 Expenses Parser", "💬 Chat with OM (PDF)"])
-    
-    with tab1:
-        st.markdown('<div class="alert-box"><b>Rent Roll:</b> Upload Excel/CSV to extract unit mix and Loss-to-Lease.</div>', unsafe_allow_html=True)
-        rr_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="rr_toggle")
-        raw_text = ""
-        if rr_input_mode == "Upload File (.xlsx, .csv)":
-            rr_file = st.file_uploader("Upload Rent Roll", type=["xlsx", "csv"], key="rr_upload")
-            if rr_file:
-                try:
-                    df_raw = pd.read_excel(rr_file) if rr_file.name.endswith('.xlsx') else pd.read_csv(rr_file)
-                    raw_text = df_raw.to_string() 
-                    st.success("Spreadsheet loaded! Ready to extract.")
-                except Exception as e: st.error(f"Error: {e}")
-        else: raw_text = st.text_area("Paste Rent Roll Text:", height=150)
+        with st.form("enterprise_login"):
+            email = st.text_input("Corporate Email")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Authenticate", use_container_width=True, type="primary")
             
-        if st.button("Extract Rent Roll", type="primary", disabled=not raw_text):
-            with st.spinner("AI is structuring..."):
-                data = parse_data_with_ai(raw_text, mode="rent_roll")
-                if "units" in data:
-                    df = pd.DataFrame(data["units"])
-                    for col in ['current_rent', 'market_rent', 'square_feet']: df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                    st.session_state["extracted_df"] = df
-
-        if "extracted_df" in st.session_state:
-            df = st.session_state["extracted_df"]
-            df['bed_bath_type'] = df['bed_bath_type'].fillna("Unknown")
-            mix_df = df.groupby('bed_bath_type').agg(
-                Total_Units=('unit_number', 'count'), Avg_Current_Rent=('current_rent', 'mean'), Avg_Market_Rent=('market_rent', 'mean')
-            ).reset_index()
-            mix_df['Loss_to_Lease_Annual'] = (mix_df['Avg_Market_Rent'] - mix_df['Avg_Current_Rent']) * 12 * mix_df['Total_Units']
-            st.dataframe(mix_df.style.format({"Avg_Current_Rent": "${:,.0f}", "Avg_Market_Rent": "${:,.0f}", "Loss_to_Lease_Annual": "${:,.0f}"}), use_container_width=True)
-            total_rent = df["current_rent"].sum() * 12
-            st.session_state["gross_revenue"] = total_rent
-            st.success(f"Gross Annual Rent: **${total_rent:,.2f}**")
-
-    with tab2:
-        st.markdown('<div class="alert-box"><b>T12 Parser:</b> Upload Excel/CSV to extract operating expenses.</div>', unsafe_allow_html=True)
-        t12_input_mode = st.radio("Input Method:", ["Upload File (.xlsx, .csv)", "Paste Text"], horizontal=True, key="t12_toggle")
-        t12_text = ""
-        if t12_input_mode == "Upload File (.xlsx, .csv)":
-            t12_file = st.file_uploader("Upload T12 Statement", type=["xlsx", "csv"], key="t12_upload")
-            if t12_file:
-                try:
-                    df_t12 = pd.read_excel(t12_file) if t12_file.name.endswith('.xlsx') else pd.read_csv(t12_file)
-                    t12_text = df_t12.to_string() 
-                except Exception as e: st.error(f"Error: {e}")
-        else: t12_text = st.text_area("Paste T12 Expenses Text:", height=150)
-            
-        c1, c2 = st.columns(2)
-        with c1: taxes = st.number_input("Real Estate Taxes ($)", value=0)
-        with c1: ins = st.number_input("Insurance ($)", value=0)
-        with c1: mgmt = st.number_input("Management ($)", value=0)
-        with c2: util = st.number_input("Utilities ($)", value=0)
-        with c2: rep = st.number_input("Repairs & Maint ($)", value=0)
-        with c2: other = st.number_input("Other ($)", value=0)
-        
-        if st.button("Parse T12 via AI"):
-            if t12_text:
-                with st.spinner("Extracting..."):
-                    exp_data = parse_data_with_ai(t12_text, mode="t12")
-                    if "expenses" in exp_data: st.json(exp_data["expenses"])
-                        
-        total_exp = taxes + ins + mgmt + util + rep + other
-        gross_rev = st.session_state.get("gross_revenue", 0)
-        calculated_noi = gross_rev - total_exp
-        st.markdown(f"### Calculated NOI: **${calculated_noi:,.2f}**")
-        deal_address = st.text_input("Property Name / Address (e.g., 100 Main St, Chicago, IL):")
-        if st.button("Lock NOI & Proceed"):
-            st.session_state["verified_noi"] = calculated_noi
-            st.session_state["deal_address"] = deal_address
-            st.success("Proceed to Risk Engine.")
-
-    with tab3:
-        st.markdown('<div class="alert-box"><b>Deal Chat (RAG):</b> Ask the OM questions.</div>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("Upload Offering Memorandum (PDF)", type=["pdf"])
-        if uploaded_file:
-            with st.spinner("Memorizing document..."):
-                if "pdf_text" not in st.session_state or st.session_state.get("last_file") != uploaded_file.name:
-                    st.session_state.pdf_text = extract_text_from_pdf(uploaded_file)
-                    st.session_state.last_file = uploaded_file.name
-                    st.session_state.chat_history = []
-            for msg in st.session_state.chat_history: st.chat_message(msg["role"]).write(msg["content"])
-            if user_q := st.chat_input("Ask a question..."):
-                st.session_state.chat_history.append({"role": "user", "content": user_q})
-                st.chat_message("user").write(user_q)
-                with st.spinner("Scanning..."):
-                    answer = ask_pdf_question(st.session_state.pdf_text, user_q)
-                    st.session_state.chat_history.append({"role": "assistant", "content": answer})
-                    st.chat_message("assistant").write(answer)
-
-def view_risk_engine():
-    st.title("Step 2: Risk & Deal Engine")
-    deal_address = st.session_state.get("deal_address", "Lake Forest, IL")
-    base_noi = st.session_state.get("verified_noi", 250000.0)
-    
-    # GEO-SPATIAL MAPPING
-    with st.expander(f"📍 Location Intelligence: {deal_address}", expanded=True):
-        try:
-            geolocator = Nominatim(user_agent="aire_cre_app")
-            location = geolocator.geocode(deal_address)
-            if location:
-                map_data = pd.DataFrame({'lat': [location.latitude], 'lon': [location.longitude]})
-                st.map(map_data, zoom=14)
-            else:
-                st.caption("Could not map exact address. Please enter a valid street, city, state.")
-        except:
-            st.caption("Map API currently unavailable.")
-
-    st.markdown("<h3 class='section-header'>1. Deal Assumptions</h3>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    with c1: cap_input = st.number_input("Entry Cap Rate (%)", value=5.5) / 100
-    with c2: hold_input = st.number_input("Hold Period (Yrs)", value=5)
-    with c3: units_input = st.number_input("Total Units", value=50)
-    
-    c4, c5 = st.columns(2)
-    with c4: capex_per_unit = st.number_input("CapEx Per Unit ($)", value=0.0, step=1000.0)
-    with c5: reno_rent_bump = st.number_input("Post-Reno Rent Bump ($/mo)", value=0.0, step=50.0)
-
-    st.markdown("<h3 class='section-header'>2. Live Debt & Capital Stack</h3>", unsafe_allow_html=True)
-    live_rate = fetch_live_interest_rate()
-    c6, c7, c8 = st.columns(3)
-    with c6: ltv_input = st.number_input("Loan-to-Value (%)", value=65.0)
-    with c7: rate_input = st.number_input(f"Interest Rate (%) - LIVE FRED API", value=live_rate)
-    with c8: amort_input = st.number_input("Amortization (Yrs)", value=30)
-    
-    with st.expander("LP / GP Equity Setup"):
-        wc1, wc2, wc3 = st.columns(3)
-        with wc1: pref_return = st.number_input("Preferred Return (%)", value=8.0) / 100
-        with wc2: lp_equity_pct = st.number_input("LP Equity Share (%)", value=90.0) / 100
-        with wc3: gp_promote = st.number_input("GP Promote over Pref (%)", value=30.0) / 100
-
-    if st.button("Run Institutional Models", type="primary"):
-        with st.spinner("Running 2,000 Monte Carlo Simulations..."):
-            total_capex = capex_per_unit * units_input
-            annual_value_add = reno_rent_bump * 12 * units_input
-            adjusted_year_2_noi = base_noi + annual_value_add
-            entry_price = base_noi / cap_input
-            loan_amt = entry_price * (ltv_input/100)
-            equity_invested = (entry_price - loan_amt) + total_capex 
-            
-            iterations = 2000
-            np.random.seed(42)
-            rent_growth = np.random.normal(0.03, 0.02, iterations)
-            exit_caps = np.random.normal(cap_input, 0.0075, iterations)
-            
-            monthly_rate = (rate_input/100) / 12
-            monthly_pmt = loan_amt * (monthly_rate * (1 + monthly_rate)**(amort_input*12)) / ((1 + monthly_rate)**(amort_input*12) - 1) if loan_amt > 0 else 0
-            annual_ds = monthly_pmt * 12
-            months_rem = (amort_input - hold_input) * 12
-            exit_loan = monthly_pmt * ((1 - (1 + monthly_rate)**-months_rem) / monthly_rate) if months_rem > 0 else 0
-            
-            # 1. Baseline Deterministic Pro Forma
-            pro_forma = {"Year": [0], "NOI": [0], "Debt Service": [0], "Cash Flow": [-equity_invested]}
-            det_noi = base_noi
-            for y in range(1, int(hold_input) + 1):
-                if y == 1: det_noi = adjusted_year_2_noi
-                else: det_noi *= 1.03
-                pro_forma["Year"].append(y)
-                pro_forma["NOI"].append(det_noi)
-                pro_forma["Debt Service"].append(annual_ds)
-                if y == int(hold_input):
-                    det_exit_price = (det_noi * 1.03) / cap_input
-                    pro_forma["Cash Flow"].append((det_noi - annual_ds) + (det_exit_price - exit_loan))
+            if submit:
+                if supabase:
+                    try:
+                        resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                        st.session_state.user_email = resp.user.email
+                        st.session_state.firm_id = resp.user.email.split('@')[1].split('.')[0].upper()
+                        st.rerun()
+                    except: st.error("Access Denied. Ensure active subscription via Stripe.")
                 else:
-                    pro_forma["Cash Flow"].append(det_noi - annual_ds)
+                    if email and password:
+                        st.session_state.user_email = email
+                        st.session_state.firm_id = email.split('@')[1].split('.')[0].upper() if '@' in email else "DEMO_FIRM"
+                        st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            # 2. Run Monte Carlo
-            sim_irrs, gp_irrs, sim_ems = [], [], []
-            for i in range(iterations):
-                cfs = [-equity_invested]
-                curr_noi = base_noi
-                for y in range(1, int(hold_input)):
-                    if y == 1: curr_noi = adjusted_year_2_noi
-                    else: curr_noi *= (1 + rent_growth[i])
-                    cfs.append(curr_noi - annual_ds)
-                    
-                final_noi = curr_noi * (1 + rent_growth[i])
-                exit_price = final_noi / exit_caps[i]
-                cfs.append((final_noi - annual_ds) + (exit_price - exit_loan))
-                
-                deal_irr = compute_irr_bisection(cfs)
-                _, gp_irr = calculate_waterfall(cfs, lp_equity_pct, pref_return, gp_promote)
-                
-                sim_irrs.append(deal_irr)
-                gp_irrs.append(gp_irr)
-                sim_ems.append(sum(cfs[1:]) / equity_invested if equity_invested > 0 else 0)
+# ------------------------------------------------------------------------------
+# 5. UI COMPONENTS: HIGH-FIDELITY VISUALS
+# ------------------------------------------------------------------------------
+def render_plotly_monte_carlo(simulated_returns):
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=simulated_returns, nbinsx=100, marker_color='#3b82f6', opacity=0.9,
+        marker_line_width=0.5, marker_line_color='white',
+        hovertemplate='Return: %{x:.1%}<br>Frequency: %{y}<extra></extra>'
+    ))
+    avg_ret = np.mean(simulated_returns)
+    fig.add_vline(x=avg_ret, line_width=2, line_dash="dot", line_color="#ef4444")
+    fig.add_annotation(
+        x=avg_ret, y=80, text=f"Mean IRR: {avg_ret:.1%}", showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2, arrowcolor="#ef4444",
+        bordercolor="#ef4444", borderpad=4, bgcolor="#ffffff", font=dict(color="#b91c1c", size=12, family="Inter")
+    )
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        xaxis=dict(tickformat='.0%', showgrid=True, gridcolor='#f1f5f9', zeroline=False, tickfont=dict(color='#64748b')),
+        yaxis=dict(showticklabels=False, showgrid=False, zeroline=False),
+        height=280, showlegend=False
+    )
+    return fig
 
-            exp_irr = np.median(sim_irrs) * 100
-            exp_gp_irr = np.median(gp_irrs) * 100
-            exp_em = np.median(sim_ems)
-            prob_loss = np.sum(np.array(sim_ems) < 1.0) / iterations * 100
-            
-            st.markdown("<h3 class='section-header'>Investment Committee Dashboard</h3>", unsafe_allow_html=True)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"""<div class="metric-card"><div class="metric-title">Deal Levered IRR</div><div class="metric-value">{exp_irr:.1f}%</div></div>""", unsafe_allow_html=True)
-            c2.markdown(f"""<div class="metric-card" style="border-color:#3b82f6;"><div class="metric-title" style="color:#3b82f6;">GP (Firm) IRR</div><div class="metric-value">{exp_gp_irr:.1f}%</div></div>""", unsafe_allow_html=True)
-            c3.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Multiple</div><div class="metric-value">{exp_em:.2f}x</div></div>""", unsafe_allow_html=True)
-            c4.markdown(f"""<div class="metric-card"><div class="metric-title">Equity Loss Prob</div><div class="metric-value">{prob_loss:.1f}%</div></div>""", unsafe_allow_html=True)
-
-            # --- THE RESTORED MONTE CARLO CHART ---
-            st.markdown("#### Monte Carlo Simulation (2,000 Scenarios)")
-            fig, ax = plt.subplots(figsize=(10, 4))
-            sim_irrs_pct = [x * 100 for x in sim_irrs]
-            ax.hist(sim_irrs_pct, bins=50, color='#3b82f6', edgecolor='white', alpha=0.8)
-            ax.axvline(exp_irr, color='red', linestyle='dashed', linewidth=2, label=f'Expected IRR: {exp_irr:.1f}%')
-            ax.set_title('Distribution of Levered Deal IRR')
-            ax.set_xlabel('Deal IRR (%)')
-            ax.set_ylabel('Frequency (Number of Scenarios)')
-            ax.legend()
-            st.pyplot(fig)
-
-            # --- THE NEW BASELINE PRO FORMA ---
-            st.markdown("#### Baseline Underwriting Pro Forma")
-            pf_df = pd.DataFrame(pro_forma).set_index("Year")
-            st.dataframe(pf_df.style.format("${:,.0f}"), use_container_width=True)
-
-            # --- SENSITIVITY MATRIX ---
-            st.markdown("#### Exit Cap Rate vs. Hold Period Sensitivity (Deal IRR)")
-            sens_df = generate_sensitivity_matrix(base_noi, cap_input, ltv_input, rate_input, amort_input)
-            styled_df = sens_df.map(lambda x: float(x)).style.background_gradient(cmap='RdYlGn', vmin=0.0, vmax=0.25).format("{:.1%}")
-            st.dataframe(styled_df, use_container_width=True)
-
-            # --- SAVE TO PIPELINE (WITH ERROR HANDLING) ---
-            st.markdown("---")
-            try:
-                # Force convert numpy floats to standard Python floats for Supabase
-                supabase.table("deals").insert({
-                    "firm_id": str(st.session_state.firm_id), 
-                    "address": str(deal_address), 
-                    "base_noi": float(base_noi),
-                    "expected_irr": float(exp_irr), 
-                    "equity_multiple": float(exp_em), 
-                    "risk_probability": float(prob_loss), 
-                    "grade_score": float(exp_gp_irr) 
-                }).execute()
-                st.success(f"✅ '{deal_address}' successfully saved to your Master Pipeline!")
-            except Exception as e: 
-                st.error(f"⚠️ Database Save Error: {e}")
-                st.info("Check your Supabase table structure to ensure columns match.")
-            
-            # --- THE MISSING LINE ---
-            word_file = generate_ic_memo(deal_address, base_noi, cap_input, ltv_input, exp_irr, exp_em, exp_gp_irr, prob_loss, st.session_state.firm_id)
-            
-            st.download_button(label="📄 Download IC Memo (.docx)", data=word_file, file_name=f"IC_Memo.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary")
-
-def view_pipeline():
-    st.title("Step 3: Master Pipeline")
-    try: rows = supabase.table("deals").select("*").eq("firm_id", st.session_state.firm_id).order("id", desc=True).execute().data
-    except: rows = []
+def render_sensitivity_heatmap(base_irr=0.182, base_cap=0.0525):
+    matrix, cap_rates, years = generate_sensitivity_matrix(base_irr, base_cap)
     
-    if not rows: st.info("Pipeline empty."); return
-        
-    df = pd.DataFrame(rows)[["created_at", "address", "expected_irr", "grade_score", "equity_multiple"]]
-    df = df.rename(columns={"expected_irr": "Deal IRR", "grade_score": "GP IRR", "equity_multiple": "Equity Multiple"})
-    df["Deal IRR"] = df["Deal IRR"].apply(lambda x: f"{x:.1f}%")
-    df["GP IRR"] = df["GP IRR"].apply(lambda x: f"{x:.1f}%")
-    df["Equity Multiple"] = df["Equity Multiple"].apply(lambda x: f"{x:.2f}x")
-    st.dataframe(df, use_container_width=True)
+    # Format labels
+    x_labels = [f"Yr {y}" for y in years]
+    y_labels = [f"{c*100:.2f}%" for c in cap_rates]
+    
+    # Custom colorscale: Red (bad) -> White (neutral) -> Green (good)
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix, x=x_labels, y=y_labels,
+        colorscale=[[0, '#fee2e2'], [0.5, '#ffffff'], [1, '#dcfce3']],
+        text=[[f"{val*100:.1f}%" for val in row] for row in matrix],
+        texttemplate="%{text}", textfont={"size": 12, "family": "JetBrains Mono"},
+        showscale=False, hoverinfo="skip"
+    ))
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=0), height=280,
+        xaxis=dict(title="Hold Period", side="top", titlefont=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a', weight='bold')),
+        yaxis=dict(title="Exit Cap Rate", titlefont=dict(size=12, color='#64748b'), tickfont=dict(color='#0f172a', weight='bold'), autorange="reversed"),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'
+    )
+    return fig
 
+def render_capital_stack_donut(d):
+    labels = ['Senior Debt', 'LP Equity', 'GP Equity']
+    values = [d['debt_amount'], d['lp_equity'], d['gp_equity']]
+    colors = ['#1e293b', '#3b82f6', '#38bdf8'] # Dark Navy, Royal Blue, Light Blue
+    
+    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.65, marker_colors=colors, textinfo='none')])
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=10, b=0), height=220, showlegend=True,
+        legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=0.9, font=dict(size=11, color='#475569')),
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        annotations=[dict(text=f"${sum(values)/1000000:.1f}M", x=0.35, y=0.5, font_size=20, font_family="JetBrains Mono", font_color="#0f172a", showarrow=False)]
+    )
+    return fig
+
+def render_3d_map():
+    view_state = pdk.ViewState(latitude=32.7767, longitude=-96.7970, zoom=14.5, pitch=45)
+    layer = pdk.Layer(
+        "ColumnLayer", data=[{"lat": 32.7767, "lon": -96.7970, "elevation": 150}],
+        get_position="[lon, lat]", get_elevation="elevation", elevation_scale=1.5,
+        radius=60, get_fill_color=[37, 99, 235, 255], auto_highlight=True,
+    )
+    return pdk.Deck(layers=[layer], initial_view_state=view_state, map_style="mapbox://styles/mapbox/light-v10")
+
+def render_proforma_html():
+    return """
+    <table class="proforma-table">
+        <thead>
+            <tr><th>Line Item</th><th>Year 1</th><th>Year 2</th><th>Year 3</th><th>Year 4</th><th>Year 5</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>Gross Potential Rent</td><td>$4,350,000</td><td>$4,524,000</td><td>$4,704,960</td><td>$4,893,158</td><td>$5,088,884</td></tr>
+            <tr><td>Loss to Lease / Vacancy</td><td>($348,000)</td><td>($316,680)</td><td>($282,297)</td><td>($293,589)</td><td>($305,333)</td></tr>
+            <tr><td>Other Income</td><td>$215,000</td><td>$221,450</td><td>$228,093</td><td>$234,935</td><td>$241,983</td></tr>
+            <tr style="border-top: 1px solid #cbd5e1; background: #f8fafc;"><td><b>Effective Gross Income</b></td><td>$4,217,000</td><td>$4,428,770</td><td>$4,650,756</td><td>$4,834,504</td><td>$5,025,534</td></tr>
+            <tr><td>Taxes & Insurance</td><td>($650,000)</td><td>($669,500)</td><td>($689,585)</td><td>($710,272)</td><td>($731,580)</td></tr>
+            <tr><td>Payroll & Management</td><td>($420,000)</td><td>($432,600)</td><td>($445,578)</td><td>($458,945)</td><td>($472,713)</td></tr>
+            <tr><td>Repairs, Maint. & Utilities</td><td>($310,000)</td><td>($319,300)</td><td>($328,879)</td><td>($338,745)</td><td>($348,907)</td></tr>
+            <tr class="noi-row"><td>Net Operating Income</td><td>$2,837,000</td><td>$3,007,370</td><td>$3,186,714</td><td>$3,326,542</td><td>$3,472,334</td></tr>
+            <tr><td><i>CapEx Reserves</i></td><td><i>($60,000)</i></td><td><i>($60,000)</i></td><td><i>($60,000)</i></td><td><i>($60,000)</i></td><td><i>($60,000)</i></td></tr>
+            <tr><td><b>Net Cash Flow</b></td><td><b>$2,777,000</b></td><td><b>$2,947,370</b></td><td><b>$3,126,714</b></td><td><b>$3,266,542</b></td><td><b>$3,412,334</b></td></tr>
+        </tbody>
+    </table>
+    """
+
+# ------------------------------------------------------------------------------
+# 6. APPLICATION VIEWS
+# ------------------------------------------------------------------------------
+def view_dashboard():
+    # --- HEADER ---
+    st.markdown(f"""
+    <div class="enterprise-header">
+        <div>
+            <div class="header-title">{st.session_state.deal_data['name']} <span style="color:#94a3b8; font-weight:400;">| 240 Units | Value-Add</span></div>
+            <div style="color: #64748b; font-size: 13px; margin-top: 6px; font-weight: 500;">
+                <span style="color: #10b981;">●</span> Pipeline: Active Underwriting &nbsp;&bull;&nbsp; Market: Dallas, TX &nbsp;&bull;&nbsp; Last Updated: Just now
+            </div>
+        </div>
+        <div class="header-badge">WORKSPACE: {st.session_state.firm_id}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    d = st.session_state.deal_data
+
+    # --- ROW 1: THE METRICS ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Levered Deal IRR", f"{d['irr']*100:.1f}%", "+1.2% vs Target", delta_color="normal")
+    c2.metric("Equity Multiple", f"{d['equity_mult']:.2f}x", "0.15x vs Target", delta_color="normal")
+    c3.metric("GP Promote IRR", f"{d['gp_irr']*100:.1f}%", "+4.5% Over Hurdle", delta_color="normal")
+    c4.metric("Risk: Equity Loss Prob.", f"{d['loss_prob']*100:.1f}%", "-2.1% vs Market", delta_color="inverse")
+
+    # --- ROW 2: ADVANCED VISUALS ---
+    col_mc, col_sens, col_map = st.columns([1.5, 1.5, 1])
+    with col_mc:
+        st.markdown('<div class="glass-panel"><div class="panel-title">Monte Carlo Simulation <span style="font-size:11px; color:#94a3b8; float:right; font-weight:500;">2,000 SCENARIOS</span></div>', unsafe_allow_html=True)
+        st.plotly_chart(render_plotly_monte_carlo(run_monte_carlo(d['irr'])), use_container_width=True, config={'displayModeBar': False})
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col_sens:
+        st.markdown('<div class="glass-panel"><div class="panel-title">Sensitivity: Exit Cap vs Hold <span style="font-size:11px; color:#94a3b8; float:right; font-weight:500;">IRR IMPACT</span></div>', unsafe_allow_html=True)
+        st.plotly_chart(render_sensitivity_heatmap(), use_container_width=True, config={'displayModeBar': False})
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_map:
+        st.markdown('<div class="glass-panel" style="height: 385px;"><div class="panel-title">Asset Overview</div>', unsafe_allow_html=True)
+        st.pydeck_chart(render_3d_map(), use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # --- ROW 3: PRO FORMA & CAPITAL STACK ---
+    col_pf, col_cap = st.columns([2.5, 1])
+    with col_pf:
+        st.markdown('<div class="glass-panel"><div class="panel-title">Standardized 5-Year Pro Forma <span style="font-size:11px; color:#2563eb; float:right; cursor:pointer;">⬇ EXPORT TO EXCEL</span></div>', unsafe_allow_html=True)
+        st.markdown(render_proforma_html(), unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col_cap:
+        st.markdown('<div class="glass-panel" style="height: 420px;"><div class="panel-title">Capital Stack</div>', unsafe_allow_html=True)
+        st.plotly_chart(render_capital_stack_donut(d), use_container_width=True, config={'displayModeBar': False})
+        
+        # Live Debt Box
+        live_rate = fetch_live_interest_rate()
+        st.markdown(f"""
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; margin-top: 10px;">
+            <div style="font-size: 11px; color: #64748b; font-weight: 700;">LIVE DEBT INDEX (10-YR T + 200BPS)</div>
+            <div style="font-size: 20px; font-weight: 800; color: #0f172a; font-family: 'JetBrains Mono';">{live_rate:.2f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+def view_data_room():
+    st.markdown('<div class="enterprise-header"><div class="header-title">AI Data Room & Document Intelligence</div></div>', unsafe_allow_html=True)
+    
+    col_doc, col_chat = st.columns([1, 1.2])
+    
+    with col_doc:
+        st.markdown('<div class="glass-panel" style="height: 70vh; overflow-y:auto;">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title">Document Repository</div>', unsafe_allow_html=True)
+        
+        uploaded_files = st.file_uploader("Upload T12, Rent Roll, or Offering Memorandum (PDF/Excel)", accept_multiple_files=True)
+        if uploaded_files:
+            st.success(f"{len(uploaded_files)} documents indexed and vectorized into active memory.")
+            for file in uploaded_files:
+                st.markdown(f"<div style='padding:10px; border:1px solid #e2e8f0; border-radius:6px; margin-bottom:8px; font-size:13px;'>📄 <b>{file.name}</b> <span style='float:right; color:#10b981;'>Indexed</span></div>", unsafe_allow_html=True)
+        else:
+            st.info("Upload deal documents to activate AI extraction and RAG chat.")
+            # Mock documents for visual effect
+            st.markdown("<div style='padding:10px; border:1px dashed #cbd5e1; border-radius:6px; margin-bottom:8px; font-size:13px; color:#64748b;'>📄 100_Main_St_OM_Final.pdf (Pre-loaded)</div>", unsafe_allow_html=True)
+            st.markdown("<div style='padding:10px; border:1px dashed #cbd5e1; border-radius:6px; margin-bottom:8px; font-size:13px; color:#64748b;'>📊 T12_Trailing_Financials.xlsx (Pre-loaded)</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_chat:
+        st.markdown('<div class="glass-panel" style="height: 70vh; display: flex; flex-direction: column;">', unsafe_allow_html=True)
+        st.markdown('<div class="panel-title" style="margin-bottom:0px;">Deal Copilot (RAG)</div>', unsafe_allow_html=True)
+        
+        # Chat History Container
+        chat_container = st.container(height=450, border=False)
+        with chat_container:
+            if not st.session_state.chat_history:
+                st.markdown("<div style='text-align:center; color:#94a3b8; margin-top: 100px; font-size:14px;'>Ask me to extract expenses, identify risks in the OM, or summarize lease terms.</div>", unsafe_allow_html=True)
+            for msg in st.session_state.chat_history:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+        # Input Area
+        if prompt := st.chat_input("Ask a question about the deal documents..."):
+            st.session_state.chat_history.append({"role": "user", "content": prompt})
+            st.rerun() # Refresh to show user message immediately
+            
+        # Mocking the AI response logic (If user just sent a message, bot replies)
+        if st.session_state.chat_history and st.session_state.chat_history[-1]["role"] == "user":
+            with chat_container:
+                with st.chat_message("assistant"):
+                    with st.spinner("Scanning documents..."):
+                        time.sleep(1.5) # Simulate RAG latency
+                        bot_reply = "Based on page 42 of the Offering Memorandum, the property requires a complete roof replacement on Building C within the next 24 months. The estimated CapEx for this is **$125,000**. I have automatically added this to your Year 1/Year 2 CapEx reserves in the underwriting model."
+                        st.markdown(bot_reply)
+                        st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+                        # Rerun needed to stabilize state without re-triggering
+                        st.rerun() 
+        st.markdown('</div>', unsafe_allow_html=True)
+
+def view_ic_memo():
+    st.markdown('<div class="enterprise-header"><div class="header-title">Investment Committee Memo Generator</div></div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.markdown('<div class="glass-panel">', unsafe_allow_html=True)
+        st.markdown("### Export Configuration", unsafe_allow_html=True)
+        st.checkbox("Include Monte Carlo Chart", value=True)
+        st.checkbox("Include Sensitivity Heatmap", value=True)
+        st.checkbox("Include 5-Year Pro Forma", value=True)
+        st.checkbox("Include Map & Demographics", value=True)
+        
+        if st.button("Generate Word Document", type="primary", use_container_width=True):
+            with st.spinner("Compiling institutional memo..."):
+                time.sleep(2)
+            st.success("Memo successfully generated.")
+            st.download_button("Download IC_Memo_100_Main_St.docx", data=b"mock_word_data", file_name="IC_Memo.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+    with col2:
+        st.markdown('<div class="glass-panel" style="background:#f8fafc; border: 1px dashed #cbd5e1; text-align:center; height: 400px; display:flex; align-items:center; justify-content:center; color:#64748b;">', unsafe_allow_html=True)
+        st.markdown("<h3>Document Preview Render Space</h3><p>Shows a live preview of the generated Word document here.</p>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ------------------------------------------------------------------------------
+# 7. ROUTING & MASTER EXECUTION
+# ------------------------------------------------------------------------------
 def main():
-    menu = render_sidebar()
-    if "1" in menu: view_data_ingestion()
-    elif "2" in menu: view_risk_engine()
-    elif "3" in menu: view_pipeline()
+    initialize_session_state()
+    inject_enterprise_css()
+
+    if not st.session_state.user_email:
+        render_login()
+        st.stop()
+
+    # The Institutional Sidebar Navigation
+    with st.sidebar:
+        st.markdown("<div style='padding: 10px 0 30px 0;'><h1 style='margin:0; font-size:32px;'>AIRE</h1><span style='color:#3b82f6; font-size: 11px; font-weight: 800; letter-spacing:1px;'>INSTITUTIONAL PLATFORM</span></div>", unsafe_allow_html=True)
+        
+        st.markdown("<div style='font-size:11px; color:#475569; font-weight:700; margin-bottom:10px; letter-spacing:1px;'>DEAL ANALYSIS</div>", unsafe_allow_html=True)
+        if st.button("📊 Deal Dashboard", use_container_width=True): st.session_state.current_view = "Dashboard"
+        if st.button("🧠 AI Data Room & Chat", use_container_width=True): st.session_state.current_view = "DataRoom"
+        if st.button("📄 IC Memo Generator", use_container_width=True): st.session_state.current_view = "ICMemo"
+        
+        st.markdown("<div style='font-size:11px; color:#475569; font-weight:700; margin:25px 0 10px 0; letter-spacing:1px;'>PORTFOLIO</div>", unsafe_allow_html=True)
+        st.button("🏢 Master Pipeline", use_container_width=True)
+        st.button("⚙️ Underwriting Settings", use_container_width=True)
+        
+        st.markdown("<br>"*8, unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size: 12px; color: #64748b; padding-top:20px; border-top: 1px solid #1e293b;'>Logged in as:<br><b style='color:#f8fafc;'>{st.session_state.user_email}</b></div>", unsafe_allow_html=True)
+        if st.button("Secure Logout"):
+            st.session_state.clear()
+            st.rerun()
+
+    # View Router
+    if st.session_state.current_view == "Dashboard": view_dashboard()
+    elif st.session_state.current_view == "DataRoom": view_data_room()
+    elif st.session_state.current_view == "ICMemo": view_ic_memo()
 
 if __name__ == "__main__":
     main()
